@@ -1,17 +1,19 @@
 # Doc
 
-The **last** site generator I will ever write.
+The **last** site generator I will ever write. Note that while this is definitely usable, it's not meant to be an *amazing product everyone should use for everything they ever want to create, ever*. Because of this, some of the choices made had only what my site needed in mind.
 
 ## How it works
 
 Doc looks for a `_pages` directory in the current directory *(unless `-d` is passed)*. This folder should contain posts and basic template files (using the convention below). It will then generate Markdown, HTML, or Plaintext documents using those files.
 
+For more information, use `doc --help`.
+
 ## File naming convention
 
 Doc expects a few files to use as templates when generating:
 
-- `index.page.(html|markdown|plaintext)`: The index/home page template for generated output.
-- `post.page.(html|markdown|plaintext)`: The template for each 'post' file.
+- `index.page.(html|markdown|plaintext)` - The index/home page template for generated output.
+- `post.page.(html|markdown|plaintext)` - The template for each 'post' file.
 
 Note: These files have to be created for each output format you wish to use. Standalone pages can be generated using the same convention: `name.page.output-format`.
 
