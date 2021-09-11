@@ -858,8 +858,8 @@ main :: () {
 
     // Sort posts by date before generating any pages
     insertion_sort(document.posts, (l: Post, r: Post) -> int {
-        if l.date > r.date return 1;
-        if l.date < r.date return -1;
+        if l.date > r.date return -1;
+        if l.date < r.date return 1;
         return 0;
     });
 

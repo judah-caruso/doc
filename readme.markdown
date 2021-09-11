@@ -15,7 +15,7 @@ Doc expects a few files to use as templates when generating:
 - `index.page.(html|markdown|plaintext)` - The index/home page template for generated output.
 - `post.page.(html|markdown|plaintext)` - The template for each 'post' file.
 
-Note: These files have to be created for each output format you wish to use. Standalone pages can be generated using the same convention: `name.page.output-format`.
+Note: These files have to be created for each output format you wish to use. Standalone pages can also be generated using the same convention: `name.page.output-format`.
 
 Posts (content files for the generator) use the `.post` extension. Posts not ending in this extension will be ignored (ex. `test.post.draft`).
 
@@ -23,7 +23,7 @@ Posts (content files for the generator) use the `.post` extension. Posts not end
 
 Because Doc can output different "display" formats, posts have their own special syntax that's relatively easy to use and allows a bit of control over the output. Think more than Markdown but less than HTML.
 
-Post files consist of "tags" contain the actual post content. Tags have the following syntax: `\tag(-attribute)*{value of tag}`. In practice, it looks like this:
+Post files consist of "tags" containing the actual content of the page. Tags have the following syntax: `\tag(-attribute)*{value of tag}`. In practice, it looks like this:
 
 ```tex
 \text { Lorem \bold{ipsum} dolor \bold-italic{sit amet}. }
@@ -107,14 +107,15 @@ A special subset of tags exist for templating purposes.
 
 ```tex
 \title    {}                  \. The title of the post (as specified by \meta-title)
-\date     { [format string] } \. Example: \date{ Posted: [format string] }
+\date     { [format string] } \. Example: \date{ Posted: %Y/%M/%D }
 \edited   { [format string] } \. Same as \date
-\posts    { [format string] } \. Example: \posts{ <li>[format string]</li> }
+\posts    { [format string] } \. Example: \posts{ <li><a href="%u">%t</a></li> }
 \contents {}                  \. The generated content of the post
 \include  { file to include } \. Includes a file (within _pages/include) directly. Note: the file will not processed
 
-\. Certain tags can be given a format string to change how the content is generated.
-\. The format string has similar syntax to 'printf' in C, however, changes depending on what tag it's affecting.
+\. Certain tags can be given a format string to change how content is generated.
+\. The format string has similar syntax to printf from C, however, valid values
+\. change depending on the tag (ie. %Y is valid for \date and \edited, but not \posts).
 
 \. Options for \date, \edited:
     \. %Y - 4 digit padded year (ex. 2021)
@@ -125,13 +126,13 @@ A special subset of tags exist for templating purposes.
     \. %d - 0 digit padded day (ex. 4)
 
 \. Options \posts:
-    \. %u - Canonical 'url' of post (can be used as link)
+    \. %u - Canonical 'url' of post (can be used as a link)
     \. %t - Title of post
 ```
 
 ## Closing
 
-To see how the generator is actually used in practice, check out the [repository for my website](https://github.com/judah-caruso/judah-caruso.github.io).
+To see how the generator is used in practice, check out the [repository for my website](https://github.com/judah-caruso/judah-caruso.github.io).
 
 ## License
 

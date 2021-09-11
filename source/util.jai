@@ -71,23 +71,22 @@ to_string :: (date: Date, format_string := "%Y/%M/%D", allocator := context.allo
 }
 
 operator < :: (lhs: Date, rhs: Date) -> bool {
+    if lhs == rhs return false;
+
     year := lhs.year - rhs.year;
     if year < 0 return true;
+    if year > 0 return false;
 
     month := lhs.month - rhs.month;
     if month < 0 return true;
+    if month > 0 return false;
 
     return lhs.day < rhs.day;
 }
 
 operator > :: (lhs: Date, rhs: Date) -> bool {
-    year := lhs.year - rhs.year;
-    if year > 0 return true;
-
-    month := lhs.month - rhs.month;
-    if month > 0 return true;
-
-    return lhs.day > rhs.day;
+    if lhs == rhs return false;
+    return !(lhs < rhs);
 }
 
 operator == :: (lhs: Date, rhs: Date) -> bool {
