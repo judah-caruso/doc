@@ -857,9 +857,12 @@ main :: () {
         { // Convert the post title into something that can be used for directories/urls
             sanitized: String_Builder;
 
-            output_file := document.current_post.title;
+            output_file: string = ---;
             if document.current_post.url.count {
                 output_file = document.current_post.url;
+            }
+            else {
+                output_file = document.current_post.title;
             }
 
             for 0..output_file.count - 1 {

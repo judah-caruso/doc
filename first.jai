@@ -1,5 +1,5 @@
 PROJECT_NAME :: "doc";
-VERSION      :: "0.0.2";
+VERSION      :: "0.0.3";
 FLAVOR       :: "fly";
 
 FAST         := true;
