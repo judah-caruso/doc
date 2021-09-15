@@ -64,7 +64,7 @@ to_string :: (date: Date, format_string := "%Y/%M/%D", allocator := context.allo
             continue;
         }
 
-        append(*date_builder, token);
+        append(*date_builder, character_utf32_to_utf8(token));
     }
 
     return builder_to_string(*date_builder);
@@ -97,24 +97,33 @@ has_token :: (str: string) -> bool {
     return str.count > 0;
 }
 
-next :: (str: *string) -> u8, bool {
-    if !str.count return 0, false;
+get_next_character :: (s: *string) -> code: u32, bytes: s64, success: Unicode_Result {
+    code, bytes, success := character_utf8_to_utf32(s.data, s.count);
 
-    chr := str.data[0];
-    str.data  += 1;
-    str.count -= 1;
+    s.data  += bytes;
+    s.count -= bytes;
+    assert(s.count >= 0);
 
-    return chr, true;
+    return code, bytes, success;
 }
 
-peek :: (str: *string) -> u8, bool {
-    n, ok := inline next(str);
-    if !ok return 0, false;
+next :: (str: *string) -> code: u32, ok: bool, length: s64 {
+    if !str.count return 0, false, 0;
 
-    str.data  -= 1;
-    str.count += 1;
+    chr, bytes, status := get_next_character(str);
+    if status != .CONVERSION_OK return 0, false, 0;
 
-    return n, true;
+    return chr, true, bytes;
+}
+
+peek :: (str: *string) -> code: u32, ok: bool, length: s64 {
+    n, ok, bytes := inline next(str);
+    if !ok return 0, false, 0;
+
+    str.data  -= bytes;
+    str.count += bytes;
+
+    return n, true, bytes;
 }
 
 to_string :: (chr: u8) -> string #expand {

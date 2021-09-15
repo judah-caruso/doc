@@ -48,6 +48,7 @@ Tags always need `{}` regardless of if they require a value (example: `\dash{}`)
 \. These tags give information to the generator before the final pages are created.
 
 \meta-title  { title of post }
+\meta-url    { some-url      } \. Uses this value instead of a santized version of \meta-title
 \meta-date   { 01/01/2021    } \. Available Formats: Year/Month/Day, Day/Month/Year, Month/Day/Year
 \meta-edited { 01/01/2021    } \. Same as \meta-date
 \meta-kind   { blog update   } \. Space-separated categories

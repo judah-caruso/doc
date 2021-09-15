@@ -36,6 +36,7 @@ Attribute :: enum {
     // Meta tags
     Meta;
     Title;
+    Url;
     Date;
     Kind;
     Edited;
@@ -81,6 +82,7 @@ to_attribute :: (str: string) -> Attribute {
     if str == {
         case "meta"      ; return .Meta;
         case "title"     ; return .Title;
+        case "url"       ; return .Url;
         case "date"      ; return .Date;
         case "kind"      ; return .Kind;
         case "edited"    ; return .Edited;
@@ -123,6 +125,7 @@ to_attribute :: (str: string) -> Attribute {
 Post :: struct {
     filename    : string;
     output_file : string;
+    url         : string;
 
     date     : Date;
     edited   : Date;
@@ -137,10 +140,10 @@ process_tag :: (document: *Document) -> (string, bool) {
     capture.count = 0;
 
     while has_token(document.current_contents) {
-        token, ok := next(*document.current_contents);
+        token, ok, len := next(*document.current_contents);
         if !ok return "", false;
         if token == #char "{" break;
-        capture.count += 1;
+        capture.count += len;
     }
 
     tags: [..]Attribute;
@@ -151,7 +154,7 @@ process_tag :: (document: *Document) -> (string, bool) {
 
         tag := to_attribute(attr);
         if tag == .Invalid {
-            print("Invalid tag: %\n", attr);
+            print("Invalid tag: '%'\n", attr);
             return "", false;
         }
 
@@ -197,7 +200,7 @@ process_content :: (document: *Document, tags: [..]Attribute) -> (string, bool) 
                 break;
         }
 
-        append(*content_builder, token);
+        append(*content_builder, character_utf32_to_utf8(token));
     }
 
     content := builder_to_string(*content_builder);
@@ -219,6 +222,9 @@ process_content :: (document: *Document, tags: [..]Attribute) -> (string, bool) 
         if kind == {
             case .Title;
                 document.current_post.title = content;
+
+            case .Url;
+                document.current_post.url = content;
 
             case .Date; #through;
             case .Edited; 
@@ -530,7 +536,7 @@ process_format_tags :: (document: Document, post: Post, format: Document.Output_
                                 continue;
                             }
 
-                                append(*builder, token);
+                            append(*builder, character_utf32_to_utf8(token));
                         }
 
                         append(*builder, "\n");
@@ -567,7 +573,7 @@ process_format_tags :: (document: Document, post: Post, format: Document.Output_
                                 continue;
                             }
 
-                            append(*builder, token);
+                            append(*builder, character_utf32_to_utf8(token));
                         }
 
                         append(*builder, "\n");
@@ -852,6 +858,10 @@ main :: () {
             sanitized: String_Builder;
 
             output_file := document.current_post.title;
+            if document.current_post.url.count {
+                output_file = document.current_post.url;
+            }
+
             for 0..output_file.count - 1 {
                 chr := output_file[it];
 
@@ -1018,5 +1028,6 @@ main :: () {
 #import "System";
 #import "File_Utilities";
 #import "Hash_Table";
+#import "Unicode";
 
 #import "IntroSort";
