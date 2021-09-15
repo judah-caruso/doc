@@ -1,6 +1,6 @@
 PROJECT_NAME :: "doc";
-VERSION      :: "0.0.1a";
-FLAVOR       :: "dreaming";
+VERSION      :: "0.0.2";
+FLAVOR       :: "fly";
 
 FAST         := true;
 DEVELOPER    := true;

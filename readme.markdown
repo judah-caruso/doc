@@ -110,6 +110,7 @@ A special subset of tags exist for templating purposes.
 \date     { [format string] } \. Example: \date{ Posted: %Y/%M/%D }
 \edited   { [format string] } \. Same as \date
 \posts    { [format string] } \. Example: \posts{ <li><a href="%u">%t</a></li> }
+\tags     { [format string] } \. Example: \tags{ <span>%k</span> }
 \contents {}                  \. The generated content of the post
 \include  { file to include } \. Includes a file (within _pages/include) directly. Note: the file will not processed
 
@@ -128,6 +129,9 @@ A special subset of tags exist for templating purposes.
 \. Options \posts:
     \. %u - Canonical 'url' of post (can be used as a link)
     \. %t - Title of post
+
+\. Options \tags:
+    \. %k - Name (kind) of tag
 ```
 
 ## Closing

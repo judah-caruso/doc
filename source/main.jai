@@ -126,17 +126,10 @@ Post :: struct {
 
     date     : Date;
     edited   : Date;
-    kind     : Post.Kind;
+    kinds    : [..]string;
     title    : string;
 
     contents : Table(Document.Output_Format, string);
-
-    Kind :: enum_flags {
-        Blog;
-        Draft;
-        Update;
-        Project;
-    }
 }
 
 process_tag :: (document: *Document) -> (string, bool) {
@@ -271,19 +264,8 @@ process_content :: (document: *Document, tags: [..]Attribute) -> (string, bool) 
 
             case .Kind;
                 kinds := split(content, " ");
-                for kinds {
-                    kind := trim(it);
-                    if kind == {
-                        case "blog"    ; document.current_post.kind |= .Blog;
-                        case "draft"   ; document.current_post.kind |= .Draft;
-                        case "update"  ; document.current_post.kind |= .Update;
-                        case "project" ; document.current_post.kind |= .Project;
-                        case;
-                            print("Unknown post kind: %\n", kind);
-                            continue;
-                    }
-                }
-
+                for kinds array_add(*document.current_post.kinds, trim(it));
+                
             case;
                 print("Invalid meta tag: %\n", kind);
                 return "", false;
@@ -526,8 +508,37 @@ process_format_tags :: (document: Document, post: Post, format: Document.Output_
                         modified_template = replace(modified_template, original_string, "");
                     }
 
+                case "tags";
+                    builder: String_Builder;
+
+                    for kind: post.kinds {
+                        format_string := value;
+
+                        while has_token(format_string) {
+                            token, ok := next(*format_string);
+                            if !ok break;
+
+                            if token == #char "%" {
+                                next_token, ok := next(*format_string);
+                                if !ok break;
+
+                                if next_token == {
+                                    case #char "k";
+                                        append(*builder, kind);
+                                }
+
+                                continue;
+                            }
+
+                                append(*builder, token);
+                        }
+
+                        append(*builder, "\n");
+                    }
+
+                    modified_template = replace(modified_template, original_string, builder_to_string(*builder));
+
                 case "posts";
-                    strings: [..]string;
                     builder: String_Builder;
 
                     for post: document.posts {
@@ -547,6 +558,10 @@ process_format_tags :: (document: Document, post: Post, format: Document.Output_
 
                                     case #char "u";
                                         append(*builder, post.output_file);
+
+                                    case #char "k";
+                                        str := join(..post.kinds, " ");
+                                        append(*builder, str);
                                 }
 
                                 continue;
