@@ -24,6 +24,7 @@ Document :: struct {
     current_contents : string;
 
     Output_Format :: enum_flags {
+        XML;
         Html;
         Markdown;
         Plaintext;
@@ -36,6 +37,7 @@ Attribute :: enum {
     // Meta tags
     Meta;
     Title;
+    Intro;
     Url;
     Date;
     Kind;
@@ -82,6 +84,7 @@ to_attribute :: (str: string) -> Attribute {
     if str == {
         case "meta"      ; return .Meta;
         case "title"     ; return .Title;
+        case "intro"     ; return .Intro;
         case "url"       ; return .Url;
         case "date"      ; return .Date;
         case "kind"      ; return .Kind;
@@ -127,10 +130,11 @@ Post :: struct {
     output_file : string;
     url         : string;
 
-    date     : Date;
-    edited   : Date;
-    kinds    : [..]string;
-    title    : string;
+    date        : Date;
+    edited      : Date;
+    title       : string;
+    description : string;
+    kinds       : [..]string;
 
     contents : Table(Document.Output_Format, string);
 }
@@ -222,6 +226,9 @@ process_content :: (document: *Document, tags: [..]Attribute) -> (string, bool) 
         if kind == {
             case .Title;
                 document.current_post.title = content;
+
+            case .Intro;
+                document.current_post.description = content;
 
             case .Url;
                 document.current_post.url = content;
@@ -390,9 +397,11 @@ process_content :: (document: *Document, tags: [..]Attribute) -> (string, bool) 
                     case .Html;
                         array_add(*prefix, "<hr />");
 
-                    case .Markdown  ; #through;
-                    case .Plaintext ;
+                    case .Markdown;
                         array_add(*prefix, "---");
+
+                    case .Plaintext;
+                        array_add(*prefix, "\n---\n");
                 }
 
             case .Break;
@@ -565,9 +574,52 @@ process_format_tags :: (document: Document, post: Post, format: Document.Output_
                                     case #char "u";
                                         append(*builder, post.output_file);
 
+                                    case #char "d";
+                                        if post.date.day {
+                                            append(*builder, to_string(post.date));
+                                        }
+
+                                    case #char "e";
+                                        if post.edited.day {
+                                            append(*builder, to_string(post.edited));
+                                        }
+
+                                    case #char "i";
+                                        if post.description.count {
+                                            append(*builder, post.description);
+                                        }
+
                                     case #char "k";
                                         str := join(..post.kinds, " ");
                                         append(*builder, str);
+
+                                    case #char "r";
+                                        ident, ok := next(*format_string);
+                                        if !ok break;
+
+                                        if ident == {
+                                            case #char "d";
+                                                if post.date.day {
+                                                    append(*builder, to_string(post.date, "%Y-%M-%DT00:00:00+00:00"));
+                                                }
+
+                                            case #char "e";
+                                                if post.edited.day {
+                                                    append(*builder, to_string(post.edited, "%Y-%M-%DT00:00:00+00:00"));
+                                                }
+
+                                            case;
+                                                str: string = ---;
+                                                str.count   = 1;
+                                                str.data    = xx *ident;
+                                                print("Unknown RSS format sequence: %%r%\n", str);
+                                        }
+
+                                    case;
+                                        str: string = ---;
+                                        str.count   = 1;
+                                        str.data    = xx *next_token;
+                                        print("Unknown format sequence: %%%\n", str);
                                 }
 
                                 continue;
@@ -601,6 +653,19 @@ process_format_tags :: (document: Document, post: Post, format: Document.Output_
                 case "contents";
                     contents, found := table_find(post.contents, format);
                     if found modified_template = replace(modified_template, original_string, contents);
+
+                // @Todo(Judah): Replace date with current system day.
+                // @Todo(Judah): Allow users to pass in their own format string instead
+                case "generated";
+                    modified_template = replace(
+                        modified_template,
+                        original_string,
+                        to_string(document.posts[0].date, "%Y-%M-%DT00:00:00+00:00"),
+                    );
+
+                case;
+                    print("Skipping unknown template tag: %\n", tag);
+                    continue;
             }
         }
     }
@@ -630,6 +695,7 @@ Usage
     %1 <flags> [formats]
 
 Formats
+    xml
     html
     markdown, md
     plaintext, text
@@ -690,6 +756,9 @@ main :: () {
         }
         else {
             if arg == {
+                case "xml";
+                    document.formats |= .XML;
+
                 case "html";
                     document.formats |= .Html;
 
@@ -719,7 +788,7 @@ main :: () {
     document.dir_includes = include_directory;
     document.dir_output   = output_directory;
 
-    // If no formats were passed, default to html
+    // If no formats were passed, default to html + xml
     if !document.formats {
         document.formats = .Html;
     }
@@ -733,6 +802,7 @@ main :: () {
         return;
     }
 
+    // Create an output directory for the formats we care about
     if document.formats & .Html {
         document.dir_html = join(document.dir_output, "html", separator);
         ok := make_directory_if_it_does_not_exist(document.dir_html);
@@ -775,6 +845,9 @@ main :: () {
 
         extension := path_extension(file);
         if extension == {
+            case "xml";
+                if !(document.formats & .XML) continue;
+
             case "html";
                 if !(document.formats & .Html) continue;
 
@@ -906,6 +979,9 @@ main :: () {
         output_dir: string;
 
         if extension == {
+            case "xml";
+                format = .XML;
+                output_dir = document.dir_output;
             case "html";
                 format = .Html;
                 output_dir = document.dir_html;
@@ -917,7 +993,7 @@ main :: () {
                 output_dir = document.dir_plaintext;
 
             case;
-                print("Unknown format: %\n", extension);
+                print("Skipping unknown format: %\n", extension);
                 continue;
         }
 

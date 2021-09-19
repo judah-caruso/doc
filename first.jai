@@ -38,11 +38,11 @@ END, DEVELOPER, FAST, RUN_TESTS, RUN_PROFILER);
     build_directory :: "output/";
     make_directory_if_it_does_not_exist(build_directory);
 
-    target := get_build_options();
 
     // Metaprogram specific options
-    target.output_type = .NO_OUTPUT;
-    set_build_options(target);
+    set_build_options_dc(.{ do_output = false });
+
+    target := get_build_options();
 
     import_path: [..]string;
     array_add(*import_path, ..target.import_path);

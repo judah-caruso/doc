@@ -47,11 +47,12 @@ Tags always need `{}` regardless of if they require a value (example: `\dash{}`)
 \... Meta tags
 \. These tags give information to the generator before the final pages are created.
 
-\meta-title  { title of post }
-\meta-url    { some-url      } \. Uses this value instead of a santized version of \meta-title
-\meta-date   { 01/01/2021    } \. Available Formats: Year/Month/Day, Day/Month/Year, Month/Day/Year
-\meta-edited { 01/01/2021    } \. Same as \meta-date
-\meta-kind   { blog update   } \. Space-separated categories
+\meta-title  { title of post  }
+\meta-url    { some-url       } \. Uses this value instead of a santized version of \meta-title
+\meta-date   { 01/01/2021     } \. Available Formats: Year/Month/Day, Day/Month/Year, Month/Day/Year
+\meta-edited { 01/01/2021     } \. Same as \meta-date
+\meta-intro  { This is a post } \. Introduction (or description) text
+\meta-kind   { blog update    } \. Space-separated categories
 
 \... Content Tags
 
@@ -107,13 +108,14 @@ I might get around to making this less annoying in the future.
 A special subset of tags exist for templating purposes.
 
 ```tex
-\title    {}                  \. The title of the post (as specified by \meta-title)
-\date     { [format string] } \. Example: \date{ Posted: %Y/%M/%D }
-\edited   { [format string] } \. Same as \date
-\posts    { [format string] } \. Example: \posts{ <li><a href="%u">%t</a></li> }
-\tags     { [format string] } \. Example: \tags{ <span>%k</span> }
-\contents {}                  \. The generated content of the post
-\include  { file to include } \. Includes a file (within _pages/include) directly. Note: the file will not processed
+\title     {}                  \. The title of the post (as specified by \meta-title)
+\date      { [format string] } \. Example: \date{ Posted: %Y/%M/%D }
+\edited    { [format string] } \. Same as \date
+\posts     { [format string] } \. Example: \posts{ <li><a href="%u">%t</a></li> }
+\tags      { [format string] } \. Example: \tags{ <span>%k</span> }
+\generated {}                  \. Date of site generation
+\contents  {}                  \. The generated content of the post
+\include   { file to include } \. Includes a file (within _pages/include) directly. Note: the file will not processed
 
 \. Certain tags can be given a format string to change how content is generated.
 \. The format string has similar syntax to printf from C, however, valid values
@@ -128,8 +130,14 @@ A special subset of tags exist for templating purposes.
     \. %d - 0 digit padded day (ex. 4)
 
 \. Options \posts:
-    \. %u - Canonical 'url' of post (can be used as a link)
-    \. %t - Title of post
+    \. %u  - Canonical 'url' of post (can be used as a link)
+    \. %t  - Title of post
+    \. %k  - Space-separated string of post kinds (as defined with \meta-kind)
+    \. %d  - Date string (using default format string)
+    \. %e  - Edited date string (same as above)
+    \. %i  - Introduction (description) string
+    \. %rd - RSS formatted date string 
+    \. %re - RSS formatted edited date string
 
 \. Options \tags:
     \. %k - Name (kind) of tag
