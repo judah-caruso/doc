@@ -49,6 +49,7 @@ Attribute :: enum {
     Separator;
     Header;
     Paragraph;
+    Aside;
     Code;
     Link;
     Text;
@@ -95,8 +96,9 @@ to_attribute :: (str: string) -> Attribute {
         case "separator" ; return .Separator;
         case "header"    ; return .Header;
         case "paragraph" ; return .Paragraph;
-        case "link"      ; return .Link;
+        case "aside"     ; return .Aside;
         case "code"      ; return .Code;
+        case "link"      ; return .Link;
         case "text"      ; return .Text;
         case "quote"     ; return .Quote;
         
@@ -276,8 +278,10 @@ process_content :: (document: *Document, tags: [..]Attribute) -> (string, bool) 
                 }
 
             case .Kind;
-                kinds := split(content, " ");
-                for kinds array_add(*document.current_post.kinds, trim(it));
+                if !document.current_post.kinds.count {
+                    kinds := split(content, " ");
+                    for kinds array_add(*document.current_post.kinds, trim(it));
+                }
                 
             case;
                 print("Invalid meta tag: %\n", kind);
@@ -312,6 +316,23 @@ process_content :: (document: *Document, tags: [..]Attribute) -> (string, bool) 
             case .Paragraph;
                 if document.current_format == {
                     case .Html; push_pair("<p>", "</p>");
+                }
+
+            case .Aside;
+                splits := split(content, ";");
+                if splits.count != 2 return "", false;
+
+                title := trim(splits[0], " \t\n");
+                body  := trim(splits[1], " \t\n");
+
+                if document.current_format == {
+                    case .Html;
+                        push_pair(sprint("<abbr title='%'>", body), "</abbr>");
+                        content = title;
+
+                    case .Markdown; #through;
+                    case .Plaintext;
+                        content = title;
                 }
 
             case .Text;
@@ -607,6 +628,11 @@ process_format_tags :: (document: Document, post: Post, format: Document.Output_
                                                 if post.edited.day {
                                                     append(*builder, to_string(post.edited, "%Y-%M-%DT00:00:00+00:00"));
                                                 }
+                                                else {
+                                                    if post.date.day {
+                                                        append(*builder, to_string(post.date, "%Y-%M-%DT00:00:00+00:00"));
+                                                    }
+                                                }
 
                                             case;
                                                 str: string = ---;
@@ -614,6 +640,8 @@ process_format_tags :: (document: Document, post: Post, format: Document.Output_
                                                 str.data    = xx *ident;
                                                 print("Unknown RSS format sequence: %%r%\n", str);
                                         }
+
+                                        continue;
 
                                     case;
                                         str: string = ---;
@@ -662,10 +690,6 @@ process_format_tags :: (document: Document, post: Post, format: Document.Output_
                         original_string,
                         to_string(document.posts[0].date, "%Y-%M-%DT00:00:00+00:00"),
                     );
-
-                case;
-                    print("Skipping unknown template tag: %\n", tag);
-                    continue;
             }
         }
     }
@@ -1040,6 +1064,9 @@ main :: () {
         for file, format: post.contents {
             sub_dir: string = ---;
             if format == {
+                case .XML; 
+                    continue format;
+                    
                 case .Html      ; sub_dir = "html";
                 case .Markdown  ; sub_dir = "markdown";
                 case .Plaintext ; sub_dir = "plaintext";

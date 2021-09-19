@@ -63,6 +63,7 @@ Tags always need `{}` regardless of if they require a value (example: `\dash{}`)
 \paragraph     { value of paragraph }
 \link          { url value of link  } \. Example: \link{ https://github.com GitHub Homepage }
 \code-language { value of block     } \. Languages: c, go, jai, javascript, lua, python
+\aside         { title; value       }
 \text          { value of text      }
 \quote         { value of quote     } \. Adds correct quotation around its value
 
