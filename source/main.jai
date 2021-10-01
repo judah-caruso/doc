@@ -43,7 +43,7 @@ Attribute :: enum {
     Kind;
     Edited;
 
-    // Sections
+    // Sections (general)
     Dash;
     Break;
     Separator;
@@ -54,6 +54,14 @@ Attribute :: enum {
     Link;
     Text;
     Quote;
+
+    // Sections (screenplay)
+    Location;
+    Transition;
+    Parenthetical;
+    Shot;
+    Action;
+    Dialog;
 
     // Formatting
     Bold;
@@ -82,47 +90,27 @@ Attribute :: enum {
 }
 
 to_attribute :: (str: string) -> Attribute {
-    if str == {
-        case "meta"      ; return .Meta;
-        case "title"     ; return .Title;
-        case "intro"     ; return .Intro;
-        case "url"       ; return .Url;
-        case "date"      ; return .Date;
-        case "kind"      ; return .Kind;
-        case "edited"    ; return .Edited;
-        
-        case "dash"      ; return .Dash;
-        case "break"     ; return .Break;
-        case "separator" ; return .Separator;
-        case "header"    ; return .Header;
-        case "paragraph" ; return .Paragraph;
-        case "aside"     ; return .Aside;
-        case "code"      ; return .Code;
-        case "link"      ; return .Link;
-        case "text"      ; return .Text;
-        case "quote"     ; return .Quote;
-        
-        case "bold"      ; return .Bold;
-        case "italic"    ; return .Italic;
-        case "underline" ; return .Underline;
-        case "monospace" ; return .Monospace;
+    #insert #run () -> string {
+        builder: String_Builder;
 
-        case "small"     ; return .Small;
-        case "medium"    ; return .Medium;
-        case "large"     ; return .Large;
+        info := type_info(Attribute);
+        for 1..info.names.count - 1 {
+            enum_member_name := info.names[it];
+            name := copy_string(enum_member_name);
+            to_lower(name);
 
-        case "c"          ; return .C;
-        case "go"         ; return .Go;
-        case "lua"        ; return .Lua;
-        case "jai"        ; return .Jai;
-        case "python"     ; return .Python;
-        case "javascript" ; return .JavaScript;
+            if it != 1 append(*builder, "            ");
+            print_to_builder(*builder, "    case \"%\"; return .%;\n", name, enum_member_name);
+        }
 
-        case "format"    ; return .Format;
-        case "html"      ; return .Html;
-        case "markdown"  ; return .Markdown;
-        case "plaintext" ; return .Plaintext;
-    }
+        return sprint(#string END
+            if str == {
+            %
+            }
+
+            return .Invalid;
+        END, builder_to_string(*builder));
+    }();
 
     return .Invalid;
 }
@@ -465,11 +453,118 @@ process_content :: (document: *Document, tags: [..]Attribute) -> (string, bool) 
                         push_pair(begin, "\n");
                 }
 
+            case .Action ; #through;
+            case .Shot   ;
+                copied := copy_string(content);
+                to_upper(copied);
+
+                if document.current_format == {
+                    case .Html;
+                        class_name := "shot";
+                        if tag == .Action {
+                            class_name = "action";
+                            to_upper(content);
+                        }
+
+                        push_pair(
+                            sprint("<span class=\"%\">", class_name),
+                            "</span>"
+                        );
+                }
+
+            case .Parenthetical;
+                content = sprint("(%)", trim(content));
+
+                if document.current_format == {
+                    case .Html;
+                        push_pair("<span class=\"parenthetical\">", "</span>");
+                }
+
+            case .Transition;
+                copied := copy_string(content);
+                to_upper(copied);
+
+                content = sprint("%:", copied);
+
+                if document.current_format == {
+                    case .Html;
+                        push_pair("<span class=\"transition\">", "</span>");
+                }
+
+            case .Location;
+                setting, location, time_of_day: string;
+
+                parts := split(content, ";");
+                if parts.count >= 1 {
+                    setting = trim(parts[0]);
+                    to_upper(setting);
+                }
+
+                if parts.count >= 2 {
+                    location = trim(parts[1]);
+                    to_upper(location);
+                }
+
+                if parts.count >= 3 {
+                    time_of_day = trim(parts[2]);
+                    to_upper(time_of_day);
+                }
+
+                str: String_Builder;
+
+                print_to_builder(*str, "%. ", setting);
+                append(*str, location);
+                if time_of_day.count
+                    print_to_builder(*str, ", %", time_of_day);
+
+                content = builder_to_string(*str);
+
+                if document.current_format == {
+                    case .Html;
+                        push_pair("<span class=\"location\">", "</span>");
+                }
+
+            case .Dialog;
+                parts := split(content, ";");
+
+                character := trim(parts[0]);
+
+                // Special case for @ removal from character names.
+                if character[0] == #char "@" {
+                    character.data  += 1;
+                    character.count -= 1;
+                }
+
+                parts.count -= 1;
+                parts.data  += 1;
+
+                to_upper(character);
+
+                dialog := join(..parts, "");
+                content = trim(dialog, " \t\n");
+
+                if document.current_format == {
+                    case .Html;
+                        array_add(*prefix, "<div>");
+
+                        push_pair(
+                            sprint("<span class=\"character\">%</span>", character),
+                            "</span>"
+                        );
+
+                        push_pair(
+                            "<span class=\"dialog\">",
+                            "</span>"
+                        );
+
+                        array_add(*suffix, "</div>");
+                }
+
             case .Html      ; #through;
             case .Markdown  ; #through;
             case .Plaintext ;
-                gross_a := tprint("%", document.current_format);
-                gross_b := tprint("%", tag);
+                gross_a := sprint("%", document.current_format);
+                gross_b := sprint("%", tag);
 
                 if gross_a == gross_b {
                     return sprint("%", content), true;
@@ -488,12 +583,14 @@ process_content :: (document: *Document, tags: [..]Attribute) -> (string, bool) 
         }
     }
 
-    return sprint(
+    output := sprint(
         "%+%+%",
         join(..prefix, ""),
         content,
         join(..suffix, ""),
-    ), true;
+    );
+
+    return output, true;
 }
 
 process_format_tags :: (document: Document, post: Post, format: Document.Output_Format, template: string, page_table: *Table(string, string)) -> string {
@@ -1072,7 +1169,7 @@ main :: () {
                 case .Plaintext ; sub_dir = "plaintext";
             }
 
-            template_filename := tprint("post.page.%", sub_dir);
+            template_filename := sprint("post.page.%", sub_dir);
 
             post_file_template, ok := table_find(page_table, template_filename);
             if !ok {

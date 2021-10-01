@@ -38,7 +38,6 @@ END, DEVELOPER, FAST, RUN_TESTS, RUN_PROFILER);
     build_directory :: "output/";
     make_directory_if_it_does_not_exist(build_directory);
 
-
     // Metaprogram specific options
     set_build_options_dc(.{ do_output = false });
 
@@ -57,8 +56,8 @@ END, DEVELOPER, FAST, RUN_TESTS, RUN_PROFILER);
 
     if FAST {
         target.optimization_level    = .RELEASE;
-        target.emit_debug_info       = .NONE;
         target.dead_code_elimination = .ALL;
+        // target.emit_debug_info       = .NONE;
     }
 
     workspace := compiler_create_workspace();
