@@ -50,10 +50,9 @@ Format guide:
     [D] Day   : 01
     [d] Day   : 1
 */
-to_string :: (date: Date, format_string := "%Y/%M/%D", allocator := context.allocator, allocator_data := context.allocator_data) -> string {
+to_string :: (date: Date, format_string := "%Y/%M/%D", allocator := context.allocator) -> string {
    date_builder: String_Builder;
    date_builder.allocator = allocator;
-   date_builder.allocator_data = allocator_data;
 
    while format_string.count {
       ok, token := next(*format_string);
@@ -334,17 +333,17 @@ to_casey_case :: (convert: string, separate_words_with_underscores := false) -> 
    #import "Windows";
    #import "Windows_Utf8";
 
-   directory_exists :: (directory: Directory, allocator := context.allocator, allocator_data := context.allocator_data) -> bool {
-      wide_dir := utf8_to_wide(directory, allocator, allocator_data);
+   directory_exists :: (directory: Directory, allocator := context.allocator) -> bool {
+      wide_dir := utf8_to_wide(directory, allocator);
       attributes := GetFileAttributesW(xx wide_dir);
-      free(wide_dir, allocator, allocator_data);
+      free(wide_dir, allocator);
       return (attributes != INVALID_FILE_ATTRIBUTES &&
              attributes & FILE_ATTRIBUTE_DIRECTORY);
    }
 }
 else #if OS == .LINUX {
-   directory_exists :: (directory: Directory, allocator := context.allocator, allocator_data := context.allocator_data) -> bool {
-      push_allocator(allocator, allocator_data);
+   directory_exists :: (directory: Directory, allocator := context.allocator) -> bool {
+      push_allocator(allocator);
       dir_name_c := to_c_string(directory); // @Note(Judah): Should actually be 'to_c_string' but it doesn't take an allocator yet.
       defer free(dir_name_c);
       stats: stat_t;

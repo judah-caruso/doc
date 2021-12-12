@@ -457,7 +457,16 @@ main :: () {
    arguments.count -= 1;
 
    print_help :: (error_string := "") {
-      print(HELP, PROJECT_NAME, PROJECT_VERSION, PROJECT_COMPILATION_DATE, join("ERROR: ", error_string)); // @Leak
+      print(
+         HELP,
+         PROJECT_NAME,
+         PROJECT_VERSION,
+         PROJECT_COMPILATION_DATE,
+         ifx error_string.count then
+            join("\nERROR: ", error_string, "\n")
+         else
+            "",
+      ); // @Leak
    }
 
    for arg, i: arguments {
@@ -1431,9 +1440,7 @@ XXX;
 
 HELP :: #string XXX
 %1 version %2 (compiled on %3)
-
 %4
-
 Usage
     %1 <flags> [formats (default: html)]
 

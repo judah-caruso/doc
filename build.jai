@@ -1,5 +1,5 @@
-PROJECT_NAME    :: "doc2";
-PROJECT_VERSION :: "0.0.1b";
+PROJECT_NAME    :: "doc";
+PROJECT_VERSION :: "2.0.0a";
 PROJECT_COMPILATION_DATE: string;
 
 FAST         := false;
