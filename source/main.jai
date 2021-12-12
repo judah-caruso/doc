@@ -1,1236 +1,1463 @@
-#placeholder NAME;
-#placeholder VERSION;
+rune      :: #type,isa u32;
+File_Path :: #type,isa string;
+Directory :: #type,isa string;
 
-Document :: struct {
-    formats: Document.Output_Format;
-    current_format: Document.Output_Format;
+// @Todo(Judah): Fix macros within multi-format macros not resolving properly.
+// i.e: (macro jp (paragraph (edit-modify justify \ $1))) only outputs html
+// macro, regardless of the format. For now this is fixed by defining the macro
+// (with the same content) for each format individually.
 
-    dir_root     : string;
-    dir_pages    : string;
-    dir_output   : string;
-    dir_includes : string;
-
-    dir_html      : string;
-    dir_markdown  : string;
-    dir_plaintext : string;
-
-    post_files: [..]string;
-    page_files: [..]string;
-
-    posts: [..]Post;
-
-    current_post     : *Post;
-    current_output   : String_Builder;
-    current_contents : string;
-
-    Output_Format :: enum_flags {
-        XML;
-        Html;
-        Markdown;
-        Plaintext;
-    }
+Output_Format :: enum_flags {
+   None;
+   Html;
+   Markdown;
+   Text;
+   Xml;
 }
 
-Attribute :: enum {
-    Invalid;
+Macro :: struct {
+   kind    : Macro.Kind;
+   formats : Output_Format;
 
-    // Meta tags
-    Meta;
-    Title;
-    Intro;
-    Url;
-    Date;
-    Kind;
-    Edited;
+   name      : string;
+   contents  : Table(Output_Format, string);
+   arguments : u64;
 
-    // Sections (general)
-    Dash;
-    Break;
-    Separator;
-    Header;
-    Paragraph;
-    Aside;
-    Code;
-    Link;
-    Text;
-    Quote;
+   action: (post: *Post, args: ..string) -> bool;
+   modify: (post: *Post, args: ..string) -> string, bool;
 
-    // Sections (screenplay)
-    Location;
-    Transition;
-    Parenthetical;
-    Shot;
-    Action;
-    Dialog;
-
-    // Formatting
-    Bold;
-    Italic;
-    Underline;
-    Monospace;
-
-    // Sizes
-    Small;
-    Medium;
-    Large;
-
-    // Languages
-    C;
-    Go;
-    Lua;
-    Jai;
-    Python;
-    JavaScript;
-
-    // Formats
-    Format;
-    Html;
-    Markdown;
-    Plaintext;
-}
-
-to_attribute :: (str: string) -> Attribute {
-    #insert #run () -> string {
-        builder: String_Builder;
-
-        info := type_info(Attribute);
-        for 1..info.names.count - 1 {
-            enum_member_name := info.names[it];
-            name := copy_string(enum_member_name);
-            to_lower(name);
-
-            if it != 1 append(*builder, "            ");
-            print_to_builder(*builder, "    case \"%\"; return .%;\n", name, enum_member_name);
-        }
-
-        return sprint(#string END
-            if str == {
-            %
-            }
-
-            return .Invalid;
-        END, builder_to_string(*builder));
-    }();
-
-    return .Invalid;
+   Kind :: enum {
+      Text;
+      Action;
+      Modify;
+   };
 }
 
 Post :: struct {
-    filename    : string;
-    output_file : string;
-    url         : string;
+   kind         : Post.Kind = .Post;
+   title        : string;
+   url          : string;
+   author       : string;
+   introduction : string;
+   published    : Date;
+   updated      : Date;
+   tags         : [..]string;
+   // footnotes : [..]string;
 
-    date        : Date;
-    edited      : Date;
-    title       : string;
-    description : string;
-    kinds       : [..]string;
+   current_format : Output_Format;
+   contents       : Table(Output_Format, string);
 
-    contents : Table(Document.Output_Format, string);
+   Kind :: enum {
+      None;
+      Post;
+      Page;
+   };
 }
 
-process_tag :: (document: *Document) -> (string, bool) {
-    capture := document.current_contents;
-    capture.count = 0;
+process_macro_definition :: (formats: Output_Format, source: *string, post: *Post) -> bool {
+   consume_whitespace(source);
 
-    while has_token(document.current_contents) {
-        token, ok, len := next(*document.current_contents);
-        if !ok return "", false;
-        if token == #char "{" break;
-        capture.count += len;
-    }
+   name := <<source;
+   name.count = 0;
 
-    tags: [..]Attribute;
+   while source.count {
+      ok, chr, width := next(source);
+      if !ok || !is_valid_identifier(chr) break;
+      name.count += width;
+   }
 
-    string_attrs := split(capture, "-");
-    for 0..string_attrs.count - 1 {
-        attr := trim(string_attrs[it]);
+   consume_whitespace(source);
 
-        tag := to_attribute(attr);
-        if tag == .Invalid {
-            print("Invalid tag: '%'\n", attr);
+   builder: String_Builder; // @Leak
+
+   while source.count {
+      ok, chr, width := next(source);
+      if !ok || chr == #char ")" {
+         source.data  -= width;
+         source.count += width;
+         break;
+      }
+
+      if chr == #char "\\" {
+         ok, chr := peek(source);
+         if !ok break;
+
+         // Escape sequence
+         escape_ok, sequence := is_valid_escape(chr);
+         if escape_ok {
+            append(*builder, sequence);
+            next(source);
+         }
+         else {
+            value := to_string(cast(u8)chr);
+            print("ERROR: Invalid escape sequence '\\%'\n", value);
+            return false;
+         }
+
+         continue;
+      }
+
+      if chr == #char "(" {
+         macro_is_unknown := true;
+
+         for fmt: enum_flags_set(formats) {
+            src := source;
+            ok, output := process_macro(fmt, src, post, .Pre_Pass);
+            if !ok continue;
+
+            append(*builder, output);
+            macro_is_unknown = false;
+            break;
+         }
+
+         if macro_is_unknown {
+            print("ERROR: Unknown macro '%'\n", name); // @Errors
+            return false;
+         }
+
+         continue;
+      }
+
+      append(*builder, character_utf32_to_utf8(chr)); // @Leak
+   }
+
+   body := builder_to_string(*builder);
+   body = trim(body, " \t\n\r");
+
+   found, macro := find_macro(name);
+   if !found {
+      macro         = table_set(*all_macros, name, .{});
+      macro.name    = name;
+      macro.formats = formats;
+
+      // Get arguments from macro body
+      scanner := body;
+      while scanner.count {
+         ok, value := next(*scanner);
+         if !ok break;
+
+         if value == #char "$" {
+            argument := scanner;
+            argument.count = 0;
+
+            while scanner.count {
+               ok, value, width := next(*scanner);
+               if !ok || !is_digit(value) {
+                  scanner.data  -= width;
+                  scanner.count += width;
+                  break;
+               }
+
+               argument.count += width;
+            }
+
+            to_parse := argument;
+            parsed_value, ok := parse_int(*to_parse, u64);
+
+            if !ok {
+               print("Invalid argument in macro: '$%'\n", argument);
+               return false;
+            }
+
+            if parsed_value > macro.arguments {
+               macro.arguments = parsed_value;
+            }
+         }
+      }
+   }
+   else {
+      macro.formats |= formats;
+   }
+
+   for format: enum_flags_set(formats) {
+      table_set(*macro.contents, format, body);
+   }
+
+   return true;
+}
+
+process_macro_invocation :: (format: Output_Format, name: string, source: *string, post: *Post, flags: Macro_Flag) -> bool, string {
+   if !name.count return false, "";
+
+   macro := table_find_pointer(all_macros, name);
+   if !macro {
+      print("ERROR: Unknown macro '%'\n", name);
+      return false, "";
+   }
+
+   consume_whitespace(source);
+
+   builder   : String_Builder; // @Leak
+   arguments : [..]string; // @Leak
+
+   capture := <<source;
+   capture.count = 0;
+
+   while source.count {
+      ok, value, width := next(source);
+      if !ok || value == #char ")" {
+         str := trim(builder_to_string(*builder), " \t\n\r");
+         if str.count array_add(*arguments, str);
+         reset(*builder);
+         source.data  -= width;
+         source.count += width;
+         break;
+      }
+
+      if value == #char "(" {
+         ok, output := process_macro(format, source, post, flags);
+         if !ok break;
+         append(*builder, output);
+         continue;
+      }
+
+      if value == #char "\\" {
+         ok, next_value := next(source);
+         if !ok break;
+
+         // Argument
+         if is_whitespace(next_value) {
+            array_add(*arguments, trim_right(builder_to_string(*builder)));
+            reset(*builder);
+            continue;
+         }
+
+         // Escape sequence
+         escape_ok, sequence := is_valid_escape(next_value);
+         if escape_ok {
+            append(*builder, sequence);
+         }
+         else {
+            value := to_string(cast(u8)next_value);
+            print("ERROR: Invalid escape sequence '\\%'\n", value);
+            return false, "";
+         }
+
+         continue;
+      }
+
+      append(*builder, character_utf32_to_utf8(value)); // @Leak
+   }
+
+   if xx arguments.count != macro.arguments {
+      print("ERROR: Macro '%' accepts % argument(s), instead given %!\n", macro.name, macro.arguments, arguments.count);
+      return false, "";
+   }
+
+   if macro.kind == .Action {
+      ok := macro.action(post, ..arguments);
+      return ok, "";
+   }
+
+   if macro.kind == .Modify {
+      ok    : bool = false;
+      value : string = ---;
+
+      if flags & .Pre_Pass {
+         value = sprint("(% %)", name, join(..arguments, " \\ ")); // @Leak
+         ok = true;
+      }
+      else {
+         value, ok = macro.modify(post, ..arguments);
+      }
+
+      return ok, value;
+   }
+
+   if !(format & macro.formats) {
+      print("ERROR: Macro '%' is not defined for %\n", macro.name, format);
+      return false, "";
+   }
+
+   body := <<table_find_pointer(macro.contents, format);
+   for 1..macro.arguments {
+      rep := sprint("$%", it);
+      body = replace(body, rep, arguments[it - 1]); // @Leak
+   }
+
+   return true, body;
+}
+
+Macro_Flag :: enum_flags {
+   Pre_Pass;
+   Secondary_Pass;
+   Raw_Output;
+};
+
+process_macro :: (format: Output_Format, source: *string, post: *Post, flags: Macro_Flag) -> bool, string {
+   consume_whitespace(source);
+
+   macro_name := <<source;
+   macro_name.count = 0;
+
+   while source.count {
+      ok, value, width := next(source);
+      if !ok || !is_valid_identifier(value) {
+         source.data  -= width;
+         source.count += width;
+         break;
+      }
+
+      macro_name.count += width;
+   }
+
+   ok     : bool   = ---;
+   output : string = ---;
+
+   if contains(macro_name, "macro") {
+      formats: Output_Format;
+
+      if contains(macro_name, "-") {
+         parts := split(macro_name, "-"); // @Leak
+         parts.data  += 1;
+         parts.count -= 1;
+
+         // @Todo(Judah): Split is weird and returns [""] when it didn't find any splits. 
+         if parts.count <= 0 || parts[0] == "" {
+            print("ERROR: Invalid macro definition '%'", macro_name);
+            return false, "";
+         }
+
+         for parts {
+            if it == {
+               case      "xml"; formats |= .Xml;
+               case     "text"; formats |= .Text;
+               case     "html"; formats |= .Html;
+               case "markdown"; formats |= .Markdown;
+               case;
+                  print("ERROR: Macro '%' has an unknown format: '%'", macro_name, it);
+                  return false, "";
+            }
+         }
+      }
+      else {
+         formats = Output_Format.Html | .Markdown | .Text | .Xml;
+      }
+
+      ok = process_macro_definition(formats, source, post);
+   }
+   else {
+      ok, output = process_macro_invocation(format, macro_name, source, post, flags);
+   }
+
+   if !(flags & .Raw_Output) && !ok {
+      return false, "";
+   }
+
+   {
+      ok, chr := next(source);
+      if !ok || chr != #char ")" {
+         invalid_character := character_utf32_to_utf8(chr); // @Leak
+         log("Expected ')' but found '%'\n", invalid_character, flags = .ERROR);
+         return false, "";
+      }
+   }
+
+   return true, output;
+}
+
+process_file :: (format: Output_Format, source: *string, post: *Post) -> bool {
+   file: String_Builder; // @Leak
+
+   while source.count {
+      ok, chr := next(source);
+      if !ok return false;
+
+      // Line comments
+      if chr == #char "\\" {
+         ok, chr = peek(source);
+         if !ok return false;
+
+         if chr == #char "." {
+            while source.count {
+               ok, chr = next(source);
+               if !ok || chr == #char "\n" break;
+            }
+         }
+
+         continue;
+      }
+
+      if chr == #char "(" {
+         ok, output := process_macro(format, source, post, .Pre_Pass);
+         if !ok return false;
+
+         if output.count {
+            replaced: String_Builder; // @Leak
+            output_copy := output;
+
+            // Do a non-macro filling pass over the processed output.
+            while output_copy.count {
+               ok, chr := next(*output_copy);
+               if !ok break;
+
+               if chr == #char "(" {
+                  ok, output = process_macro(format, *output_copy, post, .Secondary_Pass);
+                  if !ok return false;
+                  append(*replaced, output);
+               }
+               else {
+                  append(*replaced, character_utf32_to_utf8(chr)); // @Leak
+               }
+            }
+
+            output = builder_to_string(*replaced);
+
+            // Replace any special sequences
+            output = replace(output, ESCAPE_TAB, "\t"); // @Leak
+            output = replace(output, ESCAPE_SPACE, " "); // @Leak
+            output = replace(output, ESCAPE_NEWLINE, "\n"); // @Leak
+            output = replace(output, ESCAPE_OPEN_PAREN, "("); // @Leak
+            output = replace(output, ESCAPE_CLOSE_PAREN, ")"); // @Leak
+
+            append(*file, output);
+         }
+
+         consume_whitespace(source);
+         continue;
+      }
+
+      append(*file, character_utf32_to_utf8(chr)); // @Leak
+   }
+
+   if post table_set(*post.contents, format, trim_left(builder_to_string(*file), "\r\n"));
+   return true;
+}
+
+find_macro :: (name: string) -> ok: bool, *Macro {
+   macro := table_find_pointer(all_macros, name);
+   if !macro return false, null;
+   return true, macro;
+}
+
+Format_And_Path :: struct {
+   format : Output_Format;
+   path   : File_Path;
+};
+
+all_macros            : Table(string, Macro); // @Leak
+all_posts             : [..]Post; // @Leak
+all_doc_files         : [..]File_Path; // @Leak
+all_template_files    : [..]Format_And_Path; // @Leak
+format_specific_files : [..]Format_And_Path;
+custom_macro_files    : [..]File_Path; // @Leak
+
+root_directory   : Directory;
+page_directory   : Directory;
+output_directory : Directory;
+
+formats_to_output : Output_Format;
+
+process_default_macros := true;
+show_parsed_macros     := false;
+
+main :: () {
+   arguments := get_command_line_arguments(); // @Leak
+   arguments.data  += 1;
+   arguments.count -= 1;
+
+   print_help :: (error_string := "") {
+      print(HELP, PROJECT_NAME, PROJECT_VERSION, PROJECT_COMPILATION_DATE, join("ERROR: ", error_string)); // @Leak
+   }
+
+   for arg, i: arguments {
+      if arg == {
+         case    "-h"; #through;
+         case "-help";
+            print_help();
+            return;
+
+         case       "-v"; #through;
+         case "-version";
+            print("% v%\n", PROJECT_NAME, PROJECT_VERSION);
+            return;
+
+         case         "-d"; #through;
+         case "-directory";
+            if i + 1 >= arguments.count {
+               print("ERROR: Flag '%' expects an argument!\n", arg);
+               return;
+            }
+
+            i += 1;
+            directory := arguments[i];
+            root_directory = xx directory;
+
+         case "-show-macros";
+            show_parsed_macros = true;
+
+         case "-no-default-macros";
+            process_default_macros = false;
+
+         // @Note(Judah): Collect all macro files in an array then bulk process
+         // them. This allows the user to just overwrite default macros they
+         // want rather than having to replace all of them.
+         case      "-m"; #through;
+         case "-macros";
+            if i + 1 >= arguments.count {
+               print("ERROR: Flag '%' expects an argument!\n", arg);
+               return;
+            }
+
+            i += 1;
+            macro_file := arguments[i];
+            array_add(*custom_macro_files, cast(File_Path)macro_file);
+
+         case;
+            lower := arg;
+            to_lower(lower);
+
+            if lower == {
+               case "html";
+                  formats_to_output |= .Html;
+
+               case "xml";
+                  formats_to_output |= .Xml;
+
+               case  "txt"; #through;
+               case "text";
+                  formats_to_output |= .Text;
+
+               case       "md"; #through;
+               case "markdown";
+                  formats_to_output |= .Markdown;
+
+               case;
+                  print("Unknown format or flag '%'\n", arg);
+                  return;
+            }
+      }
+   }
+
+   // If format flags weren't passed through, set the default format to HTML.
+   if !formats_to_output {
+      formats_to_output = .Html;
+   }
+
+   // If a generation directory wasn't passed through, set it to the current one.
+   if !root_directory.count {
+      root_directory = xx get_working_directory(); // @Leak?
+   }
+
+   // Verify important directories exist
+   verify_directory_exists_or_exit :: (dir: Directory) #expand {
+      if !directory_exists(dir) {
+         print_help(sprint("Expected directory '%' to exist!", dir));
+         `return;
+      }
+   }
+
+   #if OS == .WINDOWS {
+      root_directory = xx replace(root_directory, "\\", "/"); // @Leak
+   }
+
+   // @Leak
+   page_directory   = xx join(root_directory, "_pages", separator = "/");
+   page_directory   = xx replace(page_directory, "//", "/"); // @Temp: Just something to clean up paths
+   output_directory = xx join(root_directory, "output", separator = "/");
+   output_directory = xx replace(output_directory, "//", "/"); // @Temp: Same as above
+
+   verify_directory_exists_or_exit(page_directory);
+   make_directory_if_it_does_not_exist(output_directory);
+
+   new_macro :: (name: string, kind: Macro.Kind, arguments: u64) -> *Macro {
+      macro := table_add(*all_macros, name, .{});
+      macro.name      = name;
+      macro.kind      = kind;
+      macro.arguments = arguments;
+      return macro;
+   }
+
+   // Register built-in macros
+   {
+      macro := new_macro("meta-title", .Action, 1);
+      macro.action = (post: *Post, args: ..string) -> bool {
+         post.title = args[0];
+         title := post.title;
+
+         sanitized: String_Builder; // @Leak
+         for 0..title.count - 1 {
+            chr := title[it];
+
+            if (chr >= #char "a" && chr <= #char "z") ||
+               (chr >= #char "A" && chr <= #char "Z") ||
+               (chr >= #char "0" && chr <= #char "9") ||
+               (chr == #char "-" || chr == #char "_")
+            {
+               append(*sanitized, to_lower(chr));
+            }
+            else if chr == #char " "  ||
+                    chr == #char "\t" ||
+                    chr == #char "\n"
+            {
+               append(*sanitized, #char "-");
+            }
+         }
+
+         post.url = builder_to_string(*sanitized);
+         return true;
+      };
+   }
+   {
+      macro := new_macro("meta-url", .Action, 1);
+      macro.action = (post: *Post, args: ..string) -> bool {
+         if !post return false;
+         post.url = args[0];
+         return true;
+      };
+   }
+   {
+      macro := new_macro("meta-introduction", .Action, 1);
+      macro.action = (post: *Post, args: ..string) -> bool {
+         if !post return false;
+         post.introduction = args[0];
+         return true;
+      };
+   }
+   {
+      macro := new_macro("meta-published", .Action, 1);
+      macro.action = (post: *Post, args: ..string) -> bool {
+         date, ok := parse_date(args[0]);
+         if !ok {
+            print("Unable to set publishing date for post!\n");
+            return false;
+         }
+
+         post.published = date;
+         return true;
+      };
+   }
+   {
+      macro := new_macro("meta-updated", .Action, 1);
+      macro.action = (post: *Post, args: ..string) -> bool {
+         date, ok := parse_date(args[0]);
+         if !ok {
+            print("Unable to set update date for post!\n");
+            return false;
+         }
+
+         post.updated = date;
+         return true;
+      };
+   }
+   {
+      macro := new_macro("meta-author", .Action, 1);
+      macro.action = (post: *Post, args: ..string) -> bool {
+         author := args[0];
+         post.author = author;
+         return true;
+      };
+   }
+   {
+      macro := new_macro("meta-tags", .Action, 1);
+      macro.action = (post: *Post, args: ..string) -> bool {
+         if post.tags.count return true; // Early exit if we've already done this
+
+         tags := split(args[0], " ");
+         for tags {
+            tags[it_index] = trim(it);
+            to_lower(it);
+            array_add(*post.tags, it);
+         }
+
+         return true;
+      };
+   }
+   {
+      macro := new_macro("meta-kind", .Action, 1);
+      macro.action = (post: *Post, args: ..string) -> bool {
+         kind := trim(args[0]);
+         to_lower(kind);
+
+         if kind == {
+            case "post";
+               post.kind = .Post;
+            case "page";
+               post.kind = .Page;
+            case;
+               print("Unknown post kind %\n", args[0]);
+               return false;
+         }
+
+         return true;
+      };
+   }
+   {
+      macro := new_macro("edit-repeat", .Modify, 2);
+      macro.formats = Output_Format.Html | .Markdown | .Text | .Xml;
+      macro.modify  = (post: *Post, args: ..string) -> string, bool {
+         raw_amount := args[0];
+         amount     := parse_int(*raw_amount);
+         value      := args[1];
+
+         builder: String_Builder;
+         for 0..amount - 1 append(*builder, value);
+         return builder_to_string(*builder), true;
+      };
+   }
+   {
+      macro := new_macro("edit-modify", .Modify, 2);
+      macro.formats = Output_Format.Html | .Markdown | .Text | .Xml;
+      macro.modify  = (post: *Post, args: ..string) -> string, bool {
+         kind  := args[0];
+         value := args[1];
+
+         if kind == {
+            case "titlecase";
+               return to_titlecase(value), true; // @Leak
+
+            case "lowercase";
+               to_lower(value);
+               return value, true;
+
+            case "uppercase";
+               to_upper(value);
+               return value, true;
+
+            // @Todo(Judah): Not shite justification
+            case "justify";
+               max_length :: 58;
+               builder: String_Builder; // @Leak
+
+               words: [..]string; // @Leak
+
+               lines       := split(value, "\n"); // @Leak
+               skipped     := 0;
+               line_length := 0;
+
+               for line: lines {
+                  line_words := split(line, " "); // @Leak
+                  for line_words if it.count array_add(*words, trim(it, " \t\n\r"));
+               }
+
+               current_line: [..]string; // @Leak, @Temp(Judah): Not necessary
+
+               for 0..words.count - 1 {
+                  word := words[it];
+
+                  if line_length + word.count >= max_length {
+                     spaces_needed := max_length - line_length;
+
+                     for w: current_line {
+                        append(*builder, w);
+
+                        if it_index < current_line.count - 1 {
+                           append(*builder, #char " ");
+                        }
+
+                        if spaces_needed > 0 {
+                           append(*builder, #char " ");
+                           spaces_needed -= 1;
+                        }
+                     }
+
+                     append(*builder, #char "\n");
+
+                     line_length = 0;
+                     array_reset(*current_line);
+                  }
+
+                  line_length += word.count + 1;
+                  array_add(*current_line, word);
+               }
+
+               if current_line.count {
+                  spaces_needed := max_length - line_length;
+
+                  for w: current_line {
+                     append(*builder, w);
+                     if it_index < current_line.count - 1 {
+                        append(*builder, #char " ");
+                     }
+                  }
+               }
+
+               return builder_to_string(*builder), true; // @Leak
+
+            case "dedent";
+               splits := split(value, "\n"); // @Leak
+               for splits splits[it_index] = trim(it, " \t\n\r");
+               return join(..splits, "\n"), true; // @Leak
+         }
+
+         print("ERROR: Invalid conversion kind for edit-modify: %\n", kind);
+         return "", false;
+      };
+   }
+   {
+      macro := new_macro("insert-file", .Modify, 1);
+      macro.formats = Output_Format.Html | .Markdown | .Text | .Xml;
+      macro.modify  = (post: *Post, args: ..string) -> string, bool {
+         filename  := args[0];
+         file_path := join(page_directory, filename, separator = "/");
+
+         contents, ok := read_entire_file(file_path); // @Leak
+         if !ok {
+            print("ERROR: Unable to insert file: %\n", file_path);
             return "", false;
-        }
+         }
 
-        array_add(*tags, tag);
-    }
+         return contents, true;
+      };
+   }
+   {
+      macro := new_macro("insert-field", .Modify, 1);
+      macro.formats = Output_Format.Html | .Markdown | .Text | .Xml;
+      macro.modify  = (post: *Post, args: ..string) -> string, bool {
+         if !post return "", false;
 
-    str, ok := process_content(document, tags);
-    return str, ok;
-}
+         field_name := args[0];
+         if field_name == {
+            case "meta-title";
+               return post.title, true;
 
-process_content :: (document: *Document, tags: [..]Attribute) -> (string, bool) { 
-    content_builder: String_Builder;
+            case "meta-published";
+               return to_string(post.published), true;
 
-    while has_token(document.current_contents) {
-        token, ok := next(*document.current_contents);
-        if !ok return "", false;
+            case "meta-introduction";
+               return post.introduction, true;
 
-        if token == { 
-            case #char "\\";
-                next_token, ok := peek(*document.current_contents);
-                if !ok return "", false;
+            case "meta-updated";
+               return to_string(post.updated), true;
 
-                if next_token == {
-                    case #char "\\";
-                        next(*document.current_contents);
-                    case #char "{";
-                        append(*content_builder, #char "{");
-                        next(*document.current_contents);
+            case "meta-author";
+               return post.author, true;
+         }
+
+         print("ERROR: Invalid field given to insert-field: '%'\n", field_name); // @Errors
+         return "", false;
+      };
+   }
+   {
+      macro := new_macro("insert-content", .Modify, 0);
+      macro.formats = Output_Format.Html | .Markdown | .Text | .Xml;
+      macro.modify  = (post: *Post, args: ..string) -> string, bool {
+         content, found := table_find(post.contents, post.current_format);
+         if !found return "", false;
+         return content, true;
+      };
+   }
+   {
+      macro := new_macro("insert-posts", .Modify, 1);
+      macro.formats = Output_Format.Html | .Markdown | .Text | .Xml;
+      macro.modify  = (_: *Post, args: ..string) -> string, bool {
+         builder: String_Builder;
+
+         for post: all_posts if post.kind == .Post {
+            format_string := args[0];
+
+            while format_string.count {
+               ok, token := next(*format_string);
+               if !ok break;
+
+               if token == #char "$" {
+                  specifier := format_string;
+                  specifier.count = 0;
+
+                  ok    : bool = ---;
+                  token : rune = ---;
+                  width : s64  = ---;
+                  while format_string.count {
+                     ok, token, width = next(*format_string);
+                     if !ok || !is_alpha(token) break;
+                     specifier.count += width;
+                  }
+
+                  if specifier == {
+                     case "url";
+                        append(*builder, post.url);
+                     case "title";
+                        append(*builder, post.title);
+                     case "introduction";
+                        append(*builder, post.introduction);
+                     case "tags";
+                        append(*builder, join(..post.tags, " ")); // @Leak
+                     case "updated";
+                        append(*builder, to_string(post.updated));
+                     case "published";
+                        append(*builder, to_string(post.published));
+                     case;
+                        print("WARN: Unknown specifier in format string: '$%'\n", specifier); // @Logging
                         continue;
-                    case #char "}";
-                        append(*content_builder, #char "}");
-                        next(*document.current_contents);
+                  }
+
+                  append(*builder, character_utf32_to_utf8(token));
+                  continue;
+               }
+
+               append(*builder, character_utf32_to_utf8(token));
+            }
+         }
+
+         return builder_to_string(*builder), true;
+      };
+   }
+   {
+      macro := new_macro("insert-tags", .Modify, 1);
+      macro.formats = Output_Format.Html | .Markdown | .Text | .Xml;
+      macro.modify  = (post: *Post, args: ..string) -> string, bool {
+         builder: String_Builder;
+
+         for post.tags {
+            format_string := args[0];
+
+            while format_string.count {
+               ok, token := next(*format_string);
+               if !ok break;
+
+               if token == #char "$" {
+                  specifier := format_string;
+                  specifier.count = 0;
+
+                  ok    : bool = ---;
+                  token : rune = ---;
+                  width : s64  = ---;
+                  while format_string.count {
+                     ok, token, width = next(*format_string);
+                     if !ok || !is_alpha(token) break;
+                     specifier.count += width;
+                  }
+
+                  if specifier == {
+                     case "tag";
+                        append(*builder, it);
+                     case;
+                        print("WARN: Unknown specifier in format string: '$%'\n", specifier); // @Logging
                         continue;
+                  }
 
-                    case;
-                        str, ok := process_tag(document);
-                        if !ok return "", false;
-                        append(*content_builder, str);
-                        continue;
-                }
+                  append(*builder, character_utf32_to_utf8(token));
+                  continue;
+               }
 
-            case #char "}";
-                break;
-        }
+               append(*builder, character_utf32_to_utf8(token));
+            }
+         }
 
-        append(*content_builder, character_utf32_to_utf8(token));
-    }
+         return builder_to_string(*builder), true;
+      };
+   }
 
-    content := builder_to_string(*content_builder);
-    content = trim(content);
+   // Process the default macro file (if allowed)
+   if process_default_macros {
+      default_macro_file := DEFAULT_MACROS;
+      process_file(0, *default_macro_file, null);
+   }
 
-    if tags[0] != .Code {
-        splits := split(content, "\n");
-        for 0..splits.count - 1 {
-            splits[it] = trim_left(splits[it]);
-        }
+   // Process custom macro files (if any)
+   for macro_file: custom_macro_files {
+      file, ok := read_entire_file(macro_file);
+      if !ok {
+         print("ERROR: Unable to open macro file '%'! Does it exist?\n", macro_file); // @Errors
+         return;
+      }
 
-        content = join(..splits, "\n");
-    }
+      ok = process_file(0, *file, null);
+      if !ok {
+         print("ERROR: Unable to process macro file '%'\n", macro_file); // @Errors
+         return;
+      }
+   }
 
-    if tags[0] == .Meta {
-        assert(tags.count > 1);
+   // Print parsed macros
+   if show_parsed_macros {
+      Temp :: struct {
+         name   : string;
+         output : string;
+      };
 
-        kind := tags[1];
-        if kind == {
-            case .Title;
-                document.current_post.title = content;
+      parsed: [..]Temp;
 
-            case .Intro;
-                document.current_post.description = content;
+      for macro: all_macros {
+         builder: String_Builder; // @Leak
 
-            case .Url;
-                document.current_post.url = content;
+         p := array_add(*parsed);
+         p.name = macro.name;
 
-            case .Date; #through;
-            case .Edited; 
-                date: Date;
-                parts := split(content, "/");
-                parse_fail := false;
+         for body, format: macro.contents {
+            name := sprint("%", format);
+            append(*builder, "    ");
+            for 0..(8 - name.count) append(*builder, " ");
+            print_to_builder(*builder, "% :: %\n", format, body);
+         }
 
-                // Janky date parsing
-                for parts {
-                    part := it;
-                    parsed, ok := parse_int(*part);
+         p.output = builder_to_string(*builder);
+      }
 
-                    if !ok || parsed <= 0 {
-                        parse_fail = true;
+      insertion_sort(parsed, (l: Temp, r: Temp) -> int {
+         if l.name[0] > r.name[0] return 1;
+         if l.name[0] < r.name[0] return -1;
+         return 0;
+      });
+
+      for parsed {
+         print("- %\n%", it.name, it.output);
+      }
+
+      return;
+   }
+
+   all_files      := file_list(page_directory, false, false); // @Leak
+   output_formats := enum_flags_set(formats_to_output);
+
+   for path: all_files {
+      filename  := path_filename(path);
+      extension := path_extension(filename);
+
+
+      // If the file is a special templating one
+      if starts_with(filename, "post")  ||
+         starts_with(filename, "page")  ||
+         starts_with(filename, "index")
+      {
+         format: Output_Format;
+
+         if extension == {
+            case "xml";
+               format = .Xml;
+
+            case "html";
+               format = .Html;
+
+            case       "md"; #through;
+            case "markdown";
+               format = .Markdown;
+
+            case  "txt"; #through;
+            case "text"; 
+               format = .Text;
+
+            case;
+               continue path;
+         }
+
+         template := array_add(*all_template_files);
+         template.path   = xx path;
+         template.format = format;
+      }
+      // If the file is a post
+      else if extension ==  "doc" ||
+              extension == "post"
+      {
+         array_add(*all_doc_files, xx path);
+      }
+      // Otherwise the file is one we should process and push (if the correct format)
+      else {
+         for output_formats {
+            should_be_included := false;
+
+            if it == {
+               case .Html;
+                  should_be_included = (extension == "html");
+               case .Markdown;
+                  should_be_included = (extension == "md"  || extension == "markdown");
+               case .Text;
+                  should_be_included = (extension == "txt" || extension == "text");
+               case .Xml;
+                  should_be_included = (extension == "xml");
+            }
+
+            if should_be_included {
+               f := array_add(*format_specific_files);
+               f.path   = xx path;
+               f.format = it;
+               break;
+            }
+         }
+      }
+   }
+
+   time_start      := get_time();
+   pages_generated := 0;
+
+   // Generate posts by processing document files
+   for doc_file: all_doc_files {
+      contents, ok := read_entire_file(doc_file); // @Leak
+      if !ok {
+         print("Unable to open file: %\n", doc_file); // @Errors
+         continue;
+      }
+
+      post := array_add(*all_posts);
+
+      for format: output_formats {
+         if format == .Xml continue; // Skip page creation for XML
+
+         contents_copy := contents;
+
+         ok = process_file(format, *contents_copy, post);
+         if !ok {
+            print("ERROR: Unable to process file: % (%)\n", doc_file, format); // @Errors
+            array_ordered_remove_by_index(*all_posts, all_posts.count - 1);
+            continue doc_file;
+         }
+      }
+
+      // @Todo(Judah): meta-published + meta-title should probably be required fields.
+
+      // If the user hasn't set any date fields
+      if post.published.day <= 0 then post.published = get_system_date();
+      if post.updated  .day <= 0 then post.updated   = get_system_date();
+
+      print(
+         "Generated file: % => '%' (%) [%]\n",
+         path_filename(doc_file),
+         post.title,
+         post.url,
+         formats_to_output
+      ); // @Logging
+
+      pages_generated += 1;
+   }
+
+   // Sort posts by date
+   insertion_sort(all_posts, (l: Post, r: Post) -> int {
+       if l.published > r.published return -1;
+       if l.published < r.published return  1;
+       return 0;
+   });
+
+   page_table: Table(File_Path, string); // @Leak
+
+   for template: all_template_files if (template.format & formats_to_output) {
+      template_file := table_find_pointer(page_table, template.path);
+      if !template_file {
+         contents, ok := read_entire_file(template.path);
+         if !ok {
+            print("ERROR: Unable to open template file: %\n", template);
+            continue;
+         }
+
+         template_file = table_set(*page_table, template.path, contents);
+      }
+
+      // Generate each final post file
+      filename := path_filename(template.path);
+
+      fmt := sprint("%", template.format); to_lower(fmt);
+      format_directory := join(output_directory, fmt, separator = "/");
+
+      make_directory_if_it_does_not_exist(format_directory);
+
+      if contains(filename, "post") ||
+         contains(filename, "page")
+      {
+         filter_kind := Post.Kind.Post;
+
+         // Temp
+         if contains(filename, "page") {
+            filter_kind = .Page;
+         }
+
+         for * post: all_posts if post.kind == filter_kind {
+            builder: String_Builder; // @Leak
+            template_copy := <<template_file;
+            post.current_format = template.format;
+
+            while template_copy.count {
+               ok, token := next(*template_copy);
+               if !ok break;
+
+               if token == #char "$" {
+                  ok, next_token := next(*template_copy);
+                  if !ok break;
+
+                  if next_token == #char "(" {
+                     ok, output := process_macro(template.format, *template_copy, post, .Raw_Output);
+                     if !ok {
+                        print("ERROR: Unable to process file: %\n", filename);
                         break;
-                    }
+                     }
 
-                    // Month
-                    if !date.month && parsed <= 12 {
-                        date.month = cast(Date.Month)parsed;
-                    }
-                    // Day
-                    else if !date.day && parsed <= 31 {
-                        date.day = parsed;
-                    }
-                    // Year
-                    else if !date.year {
-                        date.year = parsed;
-                    }
-                }
+                     append(*builder, output);
+                  }
+                  else {
+                     append(*builder, character_utf32_to_utf8(next_token)); // @Leak
+                  }
 
-                if !parse_fail {
-                    if kind == .Edited {
-                        document.current_post.edited = date;
-                    }
-                    else {
-                        document.current_post.date = date;
-                    }
-                }
-                else {
-                    print("Invalid date string: %\n", content);
-                }
+                  continue;
+               }
 
-            case .Kind;
-                if !document.current_post.kinds.count {
-                    kinds := split(content, " ");
-                    for kinds array_add(*document.current_post.kinds, trim(it));
-                }
-                
-            case;
-                print("Invalid meta tag: %\n", kind);
-                return "", false;
-        }
-
-        return "", true;
-    }
-
-    prefix: [..]string;
-    suffix: [..]string;
-
-    push_pair :: (begin: string, end: string) #expand {
-        array_add(*`prefix, begin);
-        array_insert_at(*`suffix, end, 0);
-    }
-
-    size := Attribute.Large;
-    for tag: tags {
-        if tag == {
-            case .Small  ; #through;
-            case .Medium ; #through;
-            case .Large  ;
-                size = tag;
-                array_ordered_remove_by_index(*tags, it_index);
-                break;
-        }
-    }
-
-    for tag: tags {
-        if tag == {
-            case .Paragraph;
-                if document.current_format == {
-                    case .Html; push_pair("<p>", "</p>");
-                }
-
-            case .Aside;
-                splits := split(content, ";");
-                if splits.count != 2 return "", false;
-
-                title := trim(splits[0], " \t\n");
-                body  := trim(splits[1], " \t\n");
-
-                if document.current_format == {
-                    case .Html;
-                        push_pair(sprint("<abbr title='%'>", body), "</abbr>");
-                        content = title;
-
-                    case .Markdown; #through;
-                    case .Plaintext;
-                        content = title;
-                }
-
-            case .Text;
-                if document.current_format == {
-                    case .Html      ; push_pair("<span>", "</span>");
-
-                    case .Markdown  ; #through;
-                    case .Plaintext ; push_pair("\n", "\n");
-                }
-
-            case .Quote;
-                if document.current_format == {
-                    case .Html      ; push_pair("<q>", "</q>");
-                    case .Markdown  ; push_pair("&ldquo;", "&rdquo;");
-                    case .Plaintext ; push_pair("\"", "\"");
-                }
-
-            case .Italic;
-                if document.current_format == {
-                    case .Html     ; push_pair("<em>", "</em>");
-                    case .Markdown ; push_pair("*", "*");
-                }
-
-            case .Bold;
-                if document.current_format == {
-                    case .Html     ; push_pair("<strong>", "</strong>");
-                    case .Markdown ; push_pair("**", "**");
-                }
-
-            case .Underline;
-                if document.current_format == {
-                    case .Html     ; push_pair("<span style='text-decoration: underline'>", "</span>");
-                    case .Markdown ; push_pair("_", "_");
-                }
-
-            case .Monospace;
-                if document.current_format == {
-                    case .Html     ; push_pair("<code>", "</code>");
-                    case .Markdown ; push_pair("`", "`");
-                }
-
-            case .Link;
-                url := split(content, " ")[0];
-                content = replace(content, url, "");
-                content = trim(content);
-
-                if document.current_format == {
-                    case .Html;
-                        push_pair(sprint("<a href='%'>", url), "</a>");
-
-                    case .Markdown;
-                        push_pair(sprint("[%](", content), ")");
-                        content = url;
-                }
-
-            case .Code;
-                language: string;
-
-                for tags {
-                    if it == {
-                        case .C          ; language = "c"      ; break;
-                        case .Go         ; language = "go"     ; break;
-                        case .Lua        ; language = "lua"    ; break;
-                        case .Python     ; language = "python" ; break;
-                        case .JavaScript ; language = "js"     ; break;
-                    }
-                }
-
-                if document.current_format == {
-                    case .Html;
-                        begin := "<pre>";
-                        if language.count begin = sprint("<pre class='block lang-%'>", language);
-                        push_pair(begin, "</pre>");
-
-                    case .Markdown;
-                        begin := "```";
-                        if language.count begin = sprint("```%", language);
-                        push_pair(begin, "```");
-                }
-
-            case .Separator;
-                if document.current_format == {
-                    case .Html;
-                        array_add(*prefix, "<hr />");
-
-                    case .Markdown;
-                        array_add(*prefix, "---");
-
-                    case .Plaintext;
-                        array_add(*prefix, "\n---\n");
-                }
-
-            case .Break;
-                if document.current_format == {
-                    case .Html;
-                        array_add(*prefix, "<br />");
-
-                    case .Markdown  ; #through;
-                    case .Plaintext ;
-                        array_add(*prefix, "\n");
-                }
-
-            case .Dash;
-                if size == {
-                    case .Small;
-                        array_add(*prefix, "-");
-                    case .Medium;
-                        array_add(*prefix, "&ndash;");
-                    case .Large;
-                        array_add(*prefix, "&mdash;");
-                }
-
-            case .Header;
-                if document.current_format == {
-                    case .Html;
-                        if size == {
-                            case .Small  ; push_pair("<h3>", "</h3>");
-                            case .Medium ; push_pair("<h2>", "</h2>");
-                            case .Large  ; push_pair("<h1>", "</h1>");
-                        }
-
-                    case .Markdown;
-                        begin: string = ---;
-                        if size == {
-                            case .Small  ; begin = "### ";
-                            case .Medium ; begin = "## ";
-                            case .Large  ; begin = "# ";
-                        }
-
-                        push_pair(begin, "\n");
-                }
-
-            case .Action ; #through;
-            case .Shot   ;
-                copied := copy_string(content);
-                to_upper(copied);
-
-                if document.current_format == {
-                    case .Html;
-                        class_name := "shot";
-                        if tag == .Action {
-                            class_name = "action";
-                            to_upper(content);
-                        }
-
-                        push_pair(
-                            sprint("<span class=\"%\">", class_name),
-                            "</span>"
-                        );
-                }
-
-            case .Parenthetical;
-                content = sprint("(%)", trim(content));
-
-                if document.current_format == {
-                    case .Html;
-                        push_pair("<span class=\"parenthetical\">", "</span>");
-                }
-
-            case .Transition;
-                copied := copy_string(content);
-                to_upper(copied);
-
-                content = sprint("%:", copied);
-
-                if document.current_format == {
-                    case .Html;
-                        push_pair("<span class=\"transition\">", "</span>");
-                }
-
-            case .Location;
-                setting, location, time_of_day: string;
-
-                parts := split(content, ";");
-                if parts.count >= 1 {
-                    setting = trim(parts[0]);
-                    to_upper(setting);
-                }
-
-                if parts.count >= 2 {
-                    location = trim(parts[1]);
-                    to_upper(location);
-                }
-
-                if parts.count >= 3 {
-                    time_of_day = trim(parts[2]);
-                    to_upper(time_of_day);
-                }
-
-                str: String_Builder;
-
-                print_to_builder(*str, "%. ", setting);
-                append(*str, location);
-                if time_of_day.count
-                    print_to_builder(*str, ", %", time_of_day);
-
-                content = builder_to_string(*str);
-
-                if document.current_format == {
-                    case .Html;
-                        push_pair("<span class=\"location\">", "</span>");
-                }
-
-            case .Dialog;
-                parts := split(content, ";");
-
-                character := trim(parts[0]);
-
-                // Special case for @ removal from character names.
-                if character[0] == #char "@" {
-                    character.data  += 1;
-                    character.count -= 1;
-                }
-
-                parts.count -= 1;
-                parts.data  += 1;
-
-                to_upper(character);
-
-                dialog := join(..parts, "");
-                content = trim(dialog, " \t\n");
-
-                if document.current_format == {
-                    case .Html;
-                        array_add(*prefix, "<div>");
-
-                        push_pair(
-                            sprint("<span class=\"character\">%</span>", character),
-                            "</span>"
-                        );
-
-                        push_pair(
-                            "<span class=\"dialog\">",
-                            "</span>"
-                        );
-
-                        array_add(*suffix, "</div>");
-                }
-
-            case .Html      ; #through;
-            case .Markdown  ; #through;
-            case .Plaintext ;
-                gross_a := sprint("%", document.current_format);
-                gross_b := sprint("%", tag);
-
-                if gross_a == gross_b {
-                    return sprint("%", content), true;
-                }
-
-                return "", true;
-
-            case .Format;
-                continue;
-
-            case;
-                if !(tag >= .C && tag <= .JavaScript) && !(tag >= .Small && tag <= .Large) {
-                    print("Unimplemented tag: %\n", tag);
-                    return "", true;
-                }
-        }
-    }
-
-    output := sprint(
-        "%+%+%",
-        join(..prefix, ""),
-        content,
-        join(..suffix, ""),
-    );
-
-    return output, true;
-}
-
-process_format_tags :: (document: Document, post: Post, format: Document.Output_Format, template: string, page_table: *Table(string, string)) -> string {
-    modified_template := template;
-    temp := template;
-
-    while has_token(temp) {
-        token, ok := next(*temp);
-        if !ok break;
-
-        if token == #char "\\" {
-            tag := temp;
-            tag.count = 0;
-
-            while ok {
-                token, ok = next(*temp);
-                if !ok || token == #char "{" break;
-                tag.count += 1;
+               append(*builder, character_utf32_to_utf8(token)); // @Leak
             }
 
-            value := temp;
-            value.count = 0;
-
-            while ok {
-                token, ok := next(*temp);
-                if !ok || token == #char "}" break;
-                value.count += 1;
+            extension: string = ---;
+            if post.current_format == {
+               case .Html    ; extension = ".html";
+               case .Markdown; extension = ".md";
+               case .Text    ; extension = ".txt";
+               case .Xml     ; extension = ".xml";
             }
 
-            original_string := tag;
-            original_string.data  -= 1;
-            original_string.count += value.count + 3;
+            if template.format == .Html {
+               directory := join(format_directory, post.url, separator = "/");
+               ok := make_directory_if_it_does_not_exist(directory);
+               if !ok {
+                  print("ERROR: Unable to make directory for post '%' (%)!\n", post.title, post.url);
+                  continue post;
+               }
 
-            if tag == {
-                case "title";
-                    modified_template = replace(modified_template, original_string, post.title);
-
-                case "date";
-                    if post.date.day {
-                        modified_template = replace(modified_template, original_string, to_string(post.date, value));
-                    }
-
-                case "edited";
-                    if post.edited.day {
-                        modified_template = replace(modified_template, original_string, to_string(post.edited, value));
-                    }
-                    else {
-                        modified_template = replace(modified_template, original_string, "");
-                    }
-
-                case "tags";
-                    builder: String_Builder;
-
-                    for kind: post.kinds {
-                        format_string := value;
-
-                        while has_token(format_string) {
-                            token, ok := next(*format_string);
-                            if !ok break;
-
-                            if token == #char "%" {
-                                next_token, ok := next(*format_string);
-                                if !ok break;
-
-                                if next_token == {
-                                    case #char "k";
-                                        append(*builder, kind);
-                                }
-
-                                continue;
-                            }
-
-                            append(*builder, character_utf32_to_utf8(token));
-                        }
-
-                        append(*builder, "\n");
-                    }
-
-                    modified_template = replace(modified_template, original_string, builder_to_string(*builder));
-
-                case "posts";
-                    builder: String_Builder;
-
-                    for post: document.posts {
-                        format_string := value;
-
-                        while has_token(format_string) {
-                            token, ok := next(*format_string);
-                            if !ok break;
-
-                            if token == #char "%" {
-                                next_token, ok := next(*format_string);
-                                if !ok break;
-
-                                if next_token == {
-                                    case #char "t";
-                                        append(*builder, post.title);
-
-                                    case #char "u";
-                                        append(*builder, post.output_file);
-
-                                    case #char "d";
-                                        if post.date.day {
-                                            append(*builder, to_string(post.date));
-                                        }
-
-                                    case #char "e";
-                                        if post.edited.day {
-                                            append(*builder, to_string(post.edited));
-                                        }
-
-                                    case #char "i";
-                                        if post.description.count {
-                                            append(*builder, post.description);
-                                        }
-
-                                    case #char "k";
-                                        str := join(..post.kinds, " ");
-                                        append(*builder, str);
-
-                                    case #char "r";
-                                        ident, ok := next(*format_string);
-                                        if !ok break;
-
-                                        if ident == {
-                                            case #char "d";
-                                                if post.date.day {
-                                                    append(*builder, to_string(post.date, "%Y-%M-%DT00:00:00+00:00"));
-                                                }
-
-                                            case #char "e";
-                                                if post.edited.day {
-                                                    append(*builder, to_string(post.edited, "%Y-%M-%DT00:00:00+00:00"));
-                                                }
-                                                else {
-                                                    if post.date.day {
-                                                        append(*builder, to_string(post.date, "%Y-%M-%DT00:00:00+00:00"));
-                                                    }
-                                                }
-
-                                            case;
-                                                str: string = ---;
-                                                str.count   = 1;
-                                                str.data    = xx *ident;
-                                                print("Unknown RSS format sequence: %%r%\n", str);
-                                        }
-
-                                        continue;
-
-                                    case;
-                                        str: string = ---;
-                                        str.count   = 1;
-                                        str.data    = xx *next_token;
-                                        print("Unknown format sequence: %%%\n", str);
-                                }
-
-                                continue;
-                            }
-
-                            append(*builder, character_utf32_to_utf8(token));
-                        }
-
-                        append(*builder, "\n");
-                    }
-
-                    modified_template = replace(modified_template, original_string, builder_to_string(*builder));
-
-                case "include";
-                    include, ok := table_find(<<page_table, value);
-
-                    if !ok {
-                        path := join(document.dir_includes, value);
-                        contents, ok := read_entire_file(path);
-                        if !ok {
-                            print("Unable to include file: %\n", path);
-                            continue;
-                        }
-
-                        table_set(page_table, value, contents);
-                        include = contents;
-                    }
-
-                    modified_template = replace(modified_template, original_string, include);
-
-                case "contents";
-                    contents, found := table_find(post.contents, format);
-                    if found modified_template = replace(modified_template, original_string, contents);
-
-                // @Todo(Judah): Replace date with current system day.
-                // @Todo(Judah): Allow users to pass in their own format string instead
-                case "generated";
-                    modified_template = replace(
-                        modified_template,
-                        original_string,
-                        to_string(document.posts[0].date, "%Y-%M-%DT00:00:00+00:00"),
-                    );
+               filename := join(directory, "index.html", separator = "/");
+               ok = write_entire_file(filename, builder_to_string(*builder));
+               if !ok {
+                  print("ERROR: Unable to create file for post '%' (%)!\n", post.title, post.url);
+                  continue post;
+               }
             }
-        }
-    }
+            else {
+               filename := sprint("%/%+%", format_directory, post.url, extension);
+               ok := write_entire_file(filename, builder_to_string(*builder));
+               if !ok {
+                  print("ERROR: Unable to create file for post '%' (%)!\n", post.title, post.url);
+                  continue post;
+               }
+            }
+         }
+      }
+      else if contains(filename, "index") {
+         builder: String_Builder;
+         filename      := join(format_directory, sprint("index.%", fmt), separator = "/"); // @Leak
+         template_copy := <<template_file;
 
-    return modified_template;
+         while template_copy.count {
+            ok, token := next(*template_copy);
+            if !ok break;
+
+            if token == #char "$" {
+               ok, next_token, width := next(*template_copy);
+               if !ok break;
+
+               if next_token == #char "(" {
+                  ok, output := process_macro(template.format, *template_copy, null, .Raw_Output);
+                  if !ok {
+                     print("ERROR: Unable to process file: %\n", filename);
+                     break;
+                  }
+
+                  append(*builder, output);
+               }
+               else {
+                  append(*builder, character_utf32_to_utf8(token)); // @Leak
+               }
+
+               continue;
+            }
+
+            append(*builder, character_utf32_to_utf8(token)); // @Leak
+         }
+
+         ok := make_directory_if_it_does_not_exist(format_directory);
+         if !ok {
+            print("ERROR: Unable to create directory for post: %\n", format_directory);
+            continue;
+         }
+
+         ok = write_entire_file(filename, builder_to_string(*builder));
+         if !ok {
+            print("ERROR: Unable to create file for post: %\n", filename);
+            continue;
+         }
+      }
+
+      pages_generated += 1;
+   }
+
+   // Process and push any 'pass-through' files
+   for page: format_specific_files {
+      builder: String_Builder;
+
+      filename := path_strip_extension(path_filename(page.path));
+      fmt := sprint("%", page.format); to_lower(fmt);
+      format_directory := join(output_directory, fmt, separator = "/");
+
+      output_path: string = ---;
+      if page.format == .Html {
+         output_path = join(format_directory, filename, "index.html", separator = "/");
+
+         new_folder_for_file := path_strip_filename(output_path);
+         ok := make_directory_if_it_does_not_exist(new_folder_for_file);
+         if !ok {
+            print("ERROR: Unable to create directory for file: %\n", new_folder_for_file);
+            continue;
+         }
+      }
+      else {
+         output_path = join(format_directory, sprint("%.%", filename, fmt), separator = "/");
+      }
+
+      contents, ok := read_entire_file(page.path);
+      if !ok {
+         print("ERROR: Unable to open file: %\n", page.path);
+         continue;
+      }
+
+      while contents.count {
+         ok, token := next(*contents);
+         if !ok break;
+
+         if token == #char "$" {
+            ok, next_token, width := next(*contents);
+            if !ok break;
+
+            if next_token == #char "(" {
+               ok, output := process_macro(page.format, *contents, null, .Raw_Output);
+               if !ok {
+                  print("ERROR: Unable to process file: %.%\n", filename, fmt);
+                  break;
+               }
+
+               append(*builder, output);
+            }
+            else {
+               append(*builder, character_utf32_to_utf8(token)); // @Leak
+            }
+
+            continue;
+         }
+
+         append(*builder, character_utf32_to_utf8(token)); // @Leak
+      }
+
+      ok = write_entire_file(output_path, builder_to_string(*builder));
+      if !ok {
+         print("ERROR: Unable to create file for post: %\n", output_path);
+         continue;
+      }
+
+      print("Processed file: %.%\n", filename, fmt);
+      pages_generated += 1;
+   }
+
+   time_end := get_time();
+
+   print(
+      ">> Generated % page% after %s\n",
+      pages_generated,
+      ifx pages_generated == 1 then "" else "s",
+      time_end - time_start,
+   ); // @Logging
 }
 
-generate_post :: (document: Document, post: Post, format: Document.Output_Format, template: string, output_path: string, page_table: *Table(string, string)) -> bool {
-    modified_template := process_format_tags(document, post, format, template, page_table);
-    ok := write_entire_file(output_path, modified_template);
-    return ok;
-}
+DEFAULT_MACROS :: #string XXX
+(macro          p \($1\)) \. Surrounds the argument in (parentheses)
+(macro          / (p $1)) \. Useful for code blocks: func_call(/ x, y)
+(macro      break \n)
+(macro-html break \n<br/>\n)
 
-root_directory: string = ---;
-separator: string = ---;
+(macro   dedent (edit-modify dedent \ $1))
+(macro  justify (edit-modify justify \ $1))
+(macro to-title (edit-modify titlecase \ $1))
+(macro to-upper (edit-modify uppercase \ $1))
+(macro to-lower (edit-modify lowercase \ $1))
 
-print_help :: (exe_name: string, incorrect_flag := "") {
-    error_string: string;
-    if incorrect_flag.count {
-        error_string = sprint("\nError: unknown flag '%'\n", incorrect_flag);
-    }
+\. HTML macros
+(macro-html         q <q>$1</q>)
+(macro-html      bold <strong>$1</strong>)
+(macro-html      code <pre class="lang-$1">\n$2\n</pre>)
+(macro-html      link <a href="$1">$2</a>)
+(macro-html     image <img src="$1">$2</img>)
+(macro-html    italic <em>$1</em>)
+(macro-html monospace <code>$1</code>)
+(macro-html underline <u>$1</u>)
+(macro-html paragraph \n<p>$1</p>\n)
 
-    print(#string END
-%1 (v%2, %3)
+(macro-html        flow \n<p style="text-align:justify;">$1</p>)
+(macro-html  flow-large (flow (edit-repeat 8 \ &nbsp;)$1))
+(macro-html flow-medium (flow (edit-repeat 4 \ &nbsp;)$1))
+(macro-html  flow-small (flow (edit-repeat 2 \ &nbsp;)$1))
+
+\. Markdown macros
+(macro-markdown      bold **$1**)
+(macro-markdown      code (break)```$1\n$2```(break))
+(macro-markdown      link [$1]\($2\))
+(macro-markdown     image [$1]\($2\))
+(macro-markdown    italic *$1*)
+(macro-markdown monospace `$1`)
+(macro-markdown underline __$1__)
+(macro-markdown paragraph (break)$1(break))
+
+(macro-markdown        flow (break)$1)
+(macro-markdown  flow-large (flow $1))
+(macro-markdown flow-medium (flow $1))
+(macro-markdown  flow-small (flow $1))
+
+\. Text macros
+(macro-text      bold $1)
+(macro-text      code (break)(break)$2(break)(break))
+(macro-text      link $2 [$1])
+(macro-text     image $2 \($1\))
+(macro-text    italic $1)
+(macro-text monospace [ $1 ])
+(macro-text underline _$1_)
+(macro-text paragraph (break)$1(break))
+
+\. @Todo(Judah): Replace these dumbass dots when whitespace is fixed
+(macro-text        flow (break)(justify $1))
+(macro-text  flow-large (flow (edit-repeat 8 \ \s)$1))
+(macro-text flow-medium (flow (edit-repeat 4 \ \s)$1))
+(macro-text  flow-small (flow (edit-repeat 2 \ \s)$1))
+
+\. Standard macros (way more verbose than necessary for now)
+(macro-text-markdown q "$1")
+
+(macro-html     bold-italic (bold (italic $1)))
+(macro-text     bold-italic (bold (italic $1)))
+(macro-markdown bold-italic (bold (italic $1)))
+
+(macro-html     italic-bold (italic (bold $1)))
+(macro-text     italic-bold (italic (bold $1)))
+(macro-markdown italic-bold (italic (bold $1)))
+
+(macro-html     code-c (code c \ $1))
+(macro-text     code-c (code c \ $1))
+(macro-markdown code-c (code c \ $1))
+
+(macro-html     code-go (code go \ $1))
+(macro-text     code-go (code go \ $1))
+(macro-markdown code-go (code go \ $1))
+
+(macro-html     code-jai (code jai \ $1))
+(macro-text     code-jai (code jai \ $1))
+(macro-markdown code-jai (code jai \ $1))
+
+(macro-html     code-cpp (code cpp  \ $1))
+(macro-text     code-cpp (code cpp  \ $1))
+(macro-markdown code-cpp (code cpp  \ $1))
+XXX;
+
+#placeholder PROJECT_NAME;
+#placeholder PROJECT_VERSION;
+#placeholder PROJECT_COMPILATION_DATE;
+
+HELP :: #string XXX
+%1 version %2 (compiled on %3)
+
 %4
+
 Usage
-    %1 <flags> [formats]
+    %1 <flags> [formats (default: html)]
 
 Formats
     xml
     html
     markdown, md
-    plaintext, text
+    text, txt
 
 Flags
-    -d, --directory  Sets the generation directory (should contain _pages/)
-    -h, --help       Shows this message
-    -v, --version    Shows the current version
-    END, exe_name, VERSION, FLAVOR, error_string);
-}
-
-main :: () {
-    document: Document;
-
-    args := get_command_line_arguments();
-    exe_name := path_filename(args[0]);
-
-    args.count -= 1;
-    args.data  += 1;
-
-    sep := PATH_SEPARATOR;
-    separator.data  = cast(*u8)*sep;
-    separator.count = 1;
-
-    cwd := get_working_directory();
-
-    for 0..args.count - 1 {
-        arg := args[it];
-        is_flag := arg[0] == #char "-";
-
-        if is_flag {
-            if arg == {
-                case "-h"; #through;
-                case "--help";
-                    print_help(exe_name);
-                    return;
-
-                case "-v"; #through;
-                case "--version";
-                    print("%1 v% (%)\n", NAME, VERSION, FLAVOR);
-                    return;
-
-                case "-d"; #through;
-                case "--directory";
-                    if it >= args.count - 1 {
-                        print("Error: expected directory after '%' flag!\n", arg);
-                        return;
-                    }
-
-                    cwd = join(cwd, separator, args[it + 1], separator);
-                    it += 1;
-                    continue;
-
-                case;
-                    print_help(exe_name, arg);
-                    return;
-            }
-        }
-        else {
-            if arg == {
-                case "xml";
-                    document.formats |= .XML;
-
-                case "html";
-                    document.formats |= .Html;
-
-                case "md"; #through;
-                case "markdown";
-                    document.formats |= .Markdown;
-
-                case "txt"; #through;
-                case "text"; #through;
-                case "plaintext";
-                    document.formats |= .Plaintext;
-            }
-        }
-    }
-
-    root_directory = cwd;
-    root_directory = replace(root_directory, "/", separator);
-
-    set_working_directory(root_directory);
-
-    pages_directory   := join(root_directory, separator, "_pages", separator);
-    output_directory  := join(root_directory, separator, "out", separator);
-    include_directory := join(pages_directory, separator, "include", separator);
-
-    document.dir_root     = root_directory;
-    document.dir_pages    = pages_directory;
-    document.dir_includes = include_directory;
-    document.dir_output   = output_directory;
-
-    // If no formats were passed, default to html + xml
-    if !document.formats {
-        document.formats = .Html;
-    }
-
-    start_time := get_time();
-
-    // Check passed formats and create each output directory
-    ok := make_directory_if_it_does_not_exist(document.dir_output);
-    if !ok {
-        print("Unable to create output directory: %\n", document.dir_output);
-        return;
-    }
-
-    // Create an output directory for the formats we care about
-    if document.formats & .Html {
-        document.dir_html = join(document.dir_output, "html", separator);
-        ok := make_directory_if_it_does_not_exist(document.dir_html);
-        if !ok {
-            print("Unable to make directory for Html: %\n", document.dir_html);
-            return;
-        }
-    }
-    if document.formats & .Markdown {
-        document.dir_markdown = join(document.dir_output, "markdown", separator);
-        ok := make_directory_if_it_does_not_exist(document.dir_markdown);
-        if !ok {
-            print("Unable to make directory for Markdown: %\n", document.dir_markdown);
-            return;
-        }
-    }
-    if document.formats & .Plaintext {
-        document.dir_plaintext = join(document.dir_output, "plaintext", separator);
-        ok := make_directory_if_it_does_not_exist(document.dir_plaintext);
-        if !ok {
-            print("Unable to make directory for Plaintext: %\n", document.dir_plaintext);
-            return;
-        }
-    }
-
-    // Grab all page files for the formats selected 
-    all_files := file_list(document.dir_pages, false, false);
-    for 0..all_files.count - 1 {
-        file: string = ---;
-
-        #if OS == .WINDOWS {
-            all_files[it] = replace(all_files[it], "/", "");
-            file = all_files[it];
-        }
-        else {
-            file = all_files[it];
-        }
-
-        if !contains(file, ".page") continue;
-
-        extension := path_extension(file);
-        if extension == {
-            case "xml";
-                if !(document.formats & .XML) continue;
-
-            case "html";
-                if !(document.formats & .Html) continue;
-
-            case "md"; #through;
-            case "markdown";
-                if !(document.formats & .Markdown) continue;
-
-            case "txt"; #through;
-            case "text";
-                if !(document.formats & .Plaintext) continue;
-        }
-
-        array_add(*document.page_files, file);
-    }
-
-    // Grab all post files
-    for file: all_files if path_extension(file) == "post" {
-        array_add(*document.post_files, file);
-    }
-
-    formats_to_output := enum_flags_set(document.formats);
-
-    // Process every post, generate output for each format
-    for post: document.post_files {
-        contents, ok := read_entire_file(post);
-        if !ok {
-            print("Unable to open post: %\n", post);
-            continue;
-        }
-
-        #if OS == .WINDOWS {
-            contents = replace(contents, "\r", "");
-        }
-
-        document.current_post          = array_add(*document.posts);
-        document.current_post.filename = path_filename(post);
-
-        for current_format: formats_to_output {
-            reset(*document.current_output);
-
-            document.current_format   = current_format;
-            document.current_contents = contents;
-
-            while has_token(document.current_contents) {
-                token, ok := next(*document.current_contents);
-                if !ok break;
-
-                if token == #char "\\" {
-                    // Line comment
-                    next_token, ok := peek(*document.current_contents);
-                    if ok && next_token == #char "." {
-                        while has_token(document.current_contents) {
-                            token, ok := next(*document.current_contents);
-                            if !ok || token == #char "\n" break;
-                        }
-
-                        continue;
-                    }
-
-                    doc_string, process_ok := process_tag(*document);
-                    if !process_ok break;
-
-                    if doc_string.count {
-                        append(*document.current_output, doc_string);
-
-                        if document.current_format != .Plaintext {
-                            append(*document.current_output, "\n");
-                        }
-                    }
-                }
-            }
-
-            table_add(
-                *document.current_post.contents,
-                current_format,
-                builder_to_string(*document.current_output)
-            );
-        }
-
-        { // Convert the post title into something that can be used for directories/urls
-            sanitized: String_Builder;
-
-            output_file: string = ---;
-            if document.current_post.url.count {
-                output_file = document.current_post.url;
-            }
-            else {
-                output_file = document.current_post.title;
-            }
-
-            for 0..output_file.count - 1 {
-                chr := output_file[it];
-
-                if (chr >= #char "a" && chr <= #char "z") ||
-                   (chr >= #char "A" && chr <= #char "Z") ||
-                   (chr >= #char "0" && chr <= #char "9") ||
-                   (chr == #char "-" || chr == #char "_")
-                {
-                    append(*sanitized, to_lower(chr));
-                }
-                else if chr == #char " " || chr == #char "\t" || chr == #char "\n" {
-                    append(*sanitized, #char "-");
-                }
-            }
-
-            document.current_post.output_file = builder_to_string(*sanitized);
-        }
-    }
-
-    // Sort posts by date before generating any pages
-    insertion_sort(document.posts, (l: Post, r: Post) -> int {
-        if l.date > r.date return -1;
-        if l.date < r.date return 1;
-        return 0;
-    });
-
-    page_table: Table(string, string);
-    pages_generated := 0;
-    posts_generated := 0;
-
-    // Generate non-template files
-    for path: document.page_files {
-        filename  := path_filename(path);
-        extension := path_extension(filename);
-
-        if contains(filename, "post") continue;
-
-        format: Document.Output_Format;
-        output_dir: string;
-
-        if extension == {
-            case "xml";
-                format = .XML;
-                output_dir = document.dir_output;
-            case "html";
-                format = .Html;
-                output_dir = document.dir_html;
-            case "markdown";
-                format = .Markdown;
-                output_dir = document.dir_markdown;
-            case "text";
-                format = .Plaintext;
-                output_dir = document.dir_plaintext;
-
-            case;
-                print("Skipping unknown format: %\n", extension);
-                continue;
-        }
-
-        template, ok := table_find(page_table, filename);
-        if !ok {
-            contents, ok := read_entire_file(path);
-            if !ok {
-                print("Unable to open page file: %\n", path);
-                continue;
-            }
-
-            table_set(*page_table, filename, contents);
-            template = contents;
-        }
-
-        index := find_index_from_left(filename, ".");
-        filename.count = index;
-
-        output_path: string;
-        if format == .Html && filename != "index" {
-            tmp := join(output_dir, filename);
-            output_path = join(tmp, separator, "index.html");
-            make_directory_if_it_does_not_exist(tmp);
-        }
-        else {
-            output_path = join(output_dir, filename, ".", extension);
-        }
-
-        print("Generating Page: %.%\n", filename, extension);
-
-        ok = generate_post(document, .{}, format, template, output_path, *page_table); 
-        if !ok {
-            print("Unable to generate page: %\n", path);
-            continue;
-        }
-
-        pages_generated += 1;
-    }
-
-    // Output generated posts for each format
-    for post: document.posts {
-        print("Generating Post (%): % -> %\n", document.formats, post.title, post.output_file);
-
-        for file, format: post.contents {
-            sub_dir: string = ---;
-            if format == {
-                case .XML; 
-                    continue format;
-                    
-                case .Html      ; sub_dir = "html";
-                case .Markdown  ; sub_dir = "markdown";
-                case .Plaintext ; sub_dir = "plaintext";
-            }
-
-            template_filename := sprint("post.page.%", sub_dir);
-
-            post_file_template, ok := table_find(page_table, template_filename);
-            if !ok {
-                contents, ok := read_entire_file(join(document.dir_pages, template_filename));
-                if !ok {
-                    print("Unable to open template file: %\n", template_filename);
-                    continue;
-                }
-
-                table_set(*page_table, template_filename, contents);
-                post_file_template = contents;
-            }
-
-            path := join(document.dir_output, sub_dir, separator, post.output_file);
-
-            if format == .Html {
-                ok = make_directory_if_it_does_not_exist(path);
-                if !ok {
-                    print("Unable to create directory for post: %\n", post.title);
-                    continue;
-                }
-
-                path = join(path, separator, "index.html");
-            }
-            else {
-                path = join(path, ".", sub_dir);
-            }
-
-            ok = generate_post(document, post, format, post_file_template, path, *page_table); 
-            if !ok {
-                print("Failed to create post: % (% -> %.%) \n", post.title, post.filename, post.output_file, sub_dir);
-                continue;
-            }
-        }
-
-        posts_generated += 1;
-    }
-
-    end_time := get_time();
-    duration := end_time - start_time;
-
-    print(
-        ":: Generated % page%, % post% in % second%!\n",
-        pages_generated,
-        ifx pages_generated == 1 then "" else "s",
-        posts_generated,
-        ifx posts_generated == 1 then "" else "s",
-        formatFloat(duration, zero_removal = .NO),
-        ifx duration == 1 then "" else "s",
-    );
-}
+    -no-default-macros Disables all default macros
+    -show-macros       Show parsed macros and exit
+    -m, -macros        Parses a given macro file
+    -d, -directory     Sets the directory to generate from
+    -h, -help          Shows this message
+    -v, -version       Shows the current version
+XXX;
 
 #load "util.jai";
 
-#import "Sort";
 #import "File";
 #import "Basic";
 #import "String";
-#import "System";
-#import "File_Utilities";
-#import "Hash_Table";
 #import "Unicode";
-
 #import "IntroSort";
+#import "Hash_Table"; 
+#import "File_Utilities";
