@@ -471,18 +471,21 @@ main :: () {
 
    for arg, i: arguments {
       if arg == {
-         case    "-h"; #through;
-         case "-help";
+         case     "-h"; #through;
+         case  "-help"; #through;
+         case "--help";
             print_help();
             return;
 
-         case       "-v"; #through;
-         case "-version";
+         case        "-v"; #through;
+         case  "-version"; #through;
+         case "--version";
             print("% v%\n", PROJECT_NAME, PROJECT_VERSION);
             return;
 
-         case         "-d"; #through;
-         case "-directory";
+         case          "-d"; #through;
+         case  "-directory"; #through;
+         case "--directory";
             if i + 1 >= arguments.count {
                print("ERROR: Flag '%' expects an argument!\n", arg);
                return;
@@ -492,17 +495,20 @@ main :: () {
             directory := arguments[i];
             root_directory = xx directory;
 
-         case "-show-macros";
+         case "--show-macros"; #through;
+         case  "-show-macros";
             show_parsed_macros = true;
 
-         case "-no-default-macros";
+         case  "-no-default-macros"; #through;
+         case "--no-default-macros";
             process_default_macros = false;
 
          // @Note(Judah): Collect all macro files in an array then bulk process
          // them. This allows the user to just overwrite default macros they
          // want rather than having to replace all of them.
-         case      "-m"; #through;
-         case "-macros";
+         case       "-m"; #through;
+         case  "-macros"; #through;
+         case "--macros";
             if i + 1 >= arguments.count {
                print("ERROR: Flag '%' expects an argument!\n", arg);
                return;

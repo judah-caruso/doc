@@ -64,8 +64,11 @@ END, DEVELOPER, FAST, RUN_TESTS, RUN_PROFILER);
     add_build_string(tprint("PROJECT_VERSION :: \"%\";", PROJECT_VERSION), workspace);
 
     {
+        info: Version_Info;
+        compiler_get_version_info(*info);
+
         time := get_system_time();
-        PROJECT_COMPILATION_DATE = sprint("%/%/%", time.year, time.month, time.day);
+        PROJECT_COMPILATION_DATE = sprint("%/%/% with jai version %.%.%", time.year, time.month, time.day, info.major, info.minor, info.micro);
         add_build_string(tprint("PROJECT_COMPILATION_DATE :: \"%\";", PROJECT_COMPILATION_DATE), workspace);
     }
 
